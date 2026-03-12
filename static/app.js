@@ -47,7 +47,7 @@
     const rgb = resolveCssColorToRgb(color);
     const luminance = (0.2126*rgb.r + 0.7152*rgb.g + 0.0722*rgb.b)/255;
     const titleEl = pin.querySelector('.pin-title input');
-    const noteEl = pin.querySelector('.pin-note input');
+    const noteEl = pin.querySelector('.pin-note textarea');
     const delEl = pin.querySelector('.pin-delete');
     if (luminance > 0.62){
       titleEl.style.color = '#0f1b2d';
@@ -72,7 +72,7 @@
     const titleWt = Math.round(540 + (p * 140));
     pin.style.transform = `scale(${cardScale.toFixed(3)})`;
     const title = pin.querySelector('.pin-title input');
-    const note = pin.querySelector('.pin-note input');
+    const note = pin.querySelector('.pin-note textarea');
     title.style.fontSize = `${titleSize.toFixed(2)}px`;
     title.style.fontWeight = String(titleWt);
     note.style.fontSize = `${bodySize.toFixed(2)}px`;
@@ -87,13 +87,20 @@
 
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
+  function selectedPaletteColor(){
+    const activeSw = document.querySelector('.sw.active');
+    if (activeSw && activeSw.dataset.color) return activeSw.dataset.color;
+    if (activePin && activePin.dataset.color) return activePin.dataset.color;
+    return 'var(--c1)';
+  }
+
   const pending = new Map();
   function savePin(pin){
     const id = pin.dataset.id;
     const payload = {
       id,
       title: pin.querySelector('.pin-title input').value,
-      subNote: pin.querySelector('.pin-note input').value,
+      subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
       color: pin.dataset.color || 'var(--c1)'
@@ -114,7 +121,7 @@
     const payload = {
       id: pin.dataset.id,
       title: pin.querySelector('.pin-title input').value,
-      subNote: pin.querySelector('.pin-note input').value,
+      subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
       color: pin.dataset.color || 'var(--c1)'
@@ -164,7 +171,7 @@
 
   function discardIfEmpty(pin){
     const title = pin.querySelector('.pin-title input').value.trim();
-    const note = pin.querySelector('.pin-note input').value.trim();
+    const note = pin.querySelector('.pin-note textarea').value.trim();
     if (title || note) return;
     pin.classList.add('discarding');
     setTimeout(() => {
@@ -226,7 +233,11 @@
 
     pin.querySelectorAll('input').forEach(input => {
       input.addEventListener('pointerdown', ev => ev.stopPropagation());
-      input.addEventListener('input', () => { applyDistanceStyle(pin); savePin(pin); });
+      input.addEventListener('input', () => {
+        if (input.tagName === 'TEXTAREA') { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 42) + 'px'; }
+        applyDistanceStyle(pin);
+        savePin(pin);
+      });
       input.addEventListener('focus', () => setActivePin(pin));
       input.addEventListener('blur', () => {
         setTimeout(() => {
@@ -244,11 +255,12 @@
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
-    pin.innerHTML = `<button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><input value="${(item.subNote||'').replace(/"/g,'&quot;')}" /></label>`;
+    pin.innerHTML = `<button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><textarea rows="2">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     surface.appendChild(pin);
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
     bindPin(pin);
+    const ta = pin.querySelector('.pin-note textarea'); if (ta) { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,42)+'px'; }
     setActivePin(pin);
     if (focusTitle) {
       const titleInput = pin.querySelector('.pin-title input');
@@ -265,7 +277,7 @@
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    createPin({id: uid(), title: '', subNote: '', x, y, color: 'var(--c1)'}, true, false);
+    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor()}, true, false);
     e.preventDefault();
   });
 
