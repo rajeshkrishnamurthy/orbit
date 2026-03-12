@@ -1,3 +1,6 @@
 orbit
 *.log
 .DS_Store
+data/orbit.db
+data/orbit.db.bak
+data/.orbit_initialized

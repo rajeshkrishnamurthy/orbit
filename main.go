@@ -1,15 +1,19 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 type Item struct {
@@ -23,73 +27,158 @@ type Item struct {
 }
 
 type Store struct {
-	mu    sync.Mutex
-	Items []Item
-	Path  string
+	db *sql.DB
 }
 
-func (s *Store) load() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b, err := os.ReadFile(s.Path)
+func newStore(dbPath string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return nil, err
+	}
+
+	hadDB := fileExists(dbPath)
+	initializedFlag := filepath.Join(filepath.Dir(dbPath), ".orbit_initialized")
+	jsonPath := filepath.Join(filepath.Dir(dbPath), "items.json")
+
+	if hadDB {
+		_ = backupDB(dbPath)
+	} else if fileExists(initializedFlag) && !fileExists(jsonPath) {
+		return nil, errors.New("orbit.db missing after initialization; refusing to reseed and risk state loss")
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			s.Items = seedItems()
-			return s.saveLocked()
+		return nil, err
+	}
+
+	s := &Store{db: db}
+	if err := s.ensureSchema(); err != nil {
+		return nil, err
+	}
+
+	count, err := s.countItems()
+	if err != nil {
+		return nil, err
+	}
+
+	if count == 0 {
+		if fileExists(jsonPath) {
+			if err := s.importJSON(jsonPath); err != nil {
+				return nil, err
+			}
+		} else if !fileExists(initializedFlag) {
+			if err := s.seedDefaults(); err != nil {
+				return nil, err
+			}
+		} else if !hadDB {
+			return nil, errors.New("orbit.db missing and no JSON source; refusing to reseed existing user")
 		}
+	}
+
+	if err := os.WriteFile(initializedFlag, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (s *Store) ensureSchema() error {
+	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS items (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  sub_note TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  color TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);`)
+	return err
+}
+
+func (s *Store) countItems() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM items`).Scan(&n)
+	return n, err
+}
+
+func (s *Store) importJSON(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
 		return err
 	}
 	if len(b) == 0 {
-		s.Items = seedItems()
-		return s.saveLocked()
+		return nil
 	}
-	return json.Unmarshal(b, &s.Items)
+	var items []Item
+	if err := json.Unmarshal(b, &items); err != nil {
+		return err
+	}
+	for _, it := range items {
+		if it.UpdatedAt.IsZero() {
+			it.UpdatedAt = time.Now()
+		}
+		if err := s.update(it); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (s *Store) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o755); err != nil {
-		return err
+func (s *Store) seedDefaults() error {
+	for _, it := range seedItems() {
+		if err := s.update(it); err != nil {
+			return err
+		}
 	}
-	b, err := json.MarshalIndent(s.Items, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(s.Path, b, 0o644)
+	return nil
 }
 
 func (s *Store) update(item Item) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	item.UpdatedAt = time.Now()
-	for i := range s.Items {
-		if s.Items[i].ID == item.ID {
-			s.Items[i] = item
-			return s.saveLocked()
-		}
+	now := time.Now()
+	if item.UpdatedAt.IsZero() {
+		item.UpdatedAt = now
 	}
-	s.Items = append(s.Items, item)
-	return s.saveLocked()
+	createdAt := now.Format(time.RFC3339Nano)
+	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	_, err := s.db.Exec(`
+INSERT INTO items(id,title,sub_note,x,y,color,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET
+  title=excluded.title,
+  sub_note=excluded.sub_note,
+  x=excluded.x,
+  y=excluded.y,
+  color=excluded.color,
+  updated_at=excluded.updated_at;
+`, item.ID, item.Title, item.SubNote, item.X, item.Y, item.Color, createdAt, now.Format(time.RFC3339Nano))
+	return err
 }
 
 func (s *Store) delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	filtered := s.Items[:0]
-	for _, it := range s.Items {
-		if it.ID != id {
-			filtered = append(filtered, it)
-		}
-	}
-	s.Items = filtered
-	return s.saveLocked()
+	_, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
+	return err
 }
 
-func (s *Store) snapshot() []Item {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]Item, len(s.Items))
-	copy(out, s.Items)
-	return out
+func (s *Store) snapshot() ([]Item, error) {
+	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		var it Item
+		var updated string
+		if err := rows.Scan(&it.ID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+			it.UpdatedAt = t
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 type App struct {
@@ -110,8 +199,8 @@ func seedItems() []Item {
 
 func main() {
 	tpl := template.Must(template.ParseFiles("templates/index.html"))
-	store := &Store{Path: "data/items.json"}
-	if err := store.load(); err != nil {
+	store, err := newStore("data/orbit.db")
+	if err != nil {
 		log.Fatal(err)
 	}
 	app := &App{tpl: tpl, store: store}
@@ -136,7 +225,11 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	items := a.store.snapshot()
+	items, err := a.store.snapshot()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	b, _ := json.Marshal(items)
 	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b)})
 }
@@ -185,4 +278,25 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func backupDB(path string) error {
+	src, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	backupPath := path + ".bak"
+	dst, err := os.Create(backupPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	_, err = io.Copy(dst, src)
+	return err
 }
