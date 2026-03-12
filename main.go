@@ -71,6 +71,19 @@ func (s *Store) update(item Item) error {
 	return s.saveLocked()
 }
 
+func (s *Store) delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := s.Items[:0]
+	for _, it := range s.Items {
+		if it.ID != id {
+			filtered = append(filtered, it)
+		}
+	}
+	s.Items = filtered
+	return s.saveLocked()
+}
+
 func (s *Store) snapshot() []Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,6 +120,7 @@ func main() {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 	mux.HandleFunc("/", app.home)
 	mux.HandleFunc("/api/items", app.itemsAPI)
+	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -142,6 +156,30 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.update(item); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.delete(in.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
