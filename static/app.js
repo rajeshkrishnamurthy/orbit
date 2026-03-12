@@ -95,6 +95,11 @@
   }
 
   const pending = new Map();
+
+  function markPersisted(pin){
+    pin.dataset.persistedTitle = pin.querySelector('.pin-title input').value;
+    pin.dataset.persistedSubNote = pin.querySelector('.pin-note textarea').value;
+  }
   function savePin(pin){
     const id = pin.dataset.id;
     const payload = {
@@ -113,6 +118,7 @@
         body:JSON.stringify(payload)
       }).then(() => {
         pin.dataset.saved = 'true';
+        markPersisted(pin);
       });
     }, 180));
   }
@@ -231,7 +237,7 @@
       pin.addEventListener('pointercancel', onUp);
     });
 
-    pin.querySelectorAll('input').forEach(input => {
+    pin.querySelectorAll('input, textarea').forEach(input => {
       input.addEventListener('pointerdown', ev => ev.stopPropagation());
       input.addEventListener('input', () => {
         if (input.tagName === 'TEXTAREA') { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 42) + 'px'; }
@@ -239,6 +245,42 @@
         savePin(pin);
       });
       input.addEventListener('focus', () => setActivePin(pin));
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          if (input.matches('.pin-title input')) {
+            ev.preventDefault();
+            const note = pin.querySelector('.pin-note textarea');
+            note.focus();
+            note.select();
+            return;
+          }
+          if (input.matches('.pin-note textarea')) {
+            ev.preventDefault();
+            savePin(pin);
+            input.blur();
+            return;
+          }
+        }
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          if (pin.dataset.saved !== 'true') {
+            pin.classList.add('discarding');
+            setTimeout(() => {
+              if (activePin === pin) setActivePin(null);
+              pin.remove();
+            }, 120);
+            return;
+          }
+          const titleInput = pin.querySelector('.pin-title input');
+          const noteInput = pin.querySelector('.pin-note textarea');
+          titleInput.value = pin.dataset.persistedTitle || '';
+          noteInput.value = pin.dataset.persistedSubNote || '';
+          noteInput.style.height = 'auto';
+          noteInput.style.height = Math.min(noteInput.scrollHeight, 42) + 'px';
+          applyDistanceStyle(pin);
+          input.blur();
+        }
+      });
       input.addEventListener('blur', () => {
         setTimeout(() => {
           const focusedInside = pin.contains(document.activeElement);
@@ -256,6 +298,8 @@
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
     pin.innerHTML = `<button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><textarea rows="2">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    pin.dataset.persistedTitle = item.title || '';
+    pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
