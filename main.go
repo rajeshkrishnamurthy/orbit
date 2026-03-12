@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,6 +24,7 @@ type Item struct {
 	X         float64   `json:"x"`
 	Y         float64   `json:"y"`
 	Color     string    `json:"color"`
+	Hidden    bool      `json:"hidden,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -91,10 +93,18 @@ CREATE TABLE IF NOT EXISTS items (
   x REAL NOT NULL,
   y REAL NOT NULL,
   color TEXT NOT NULL,
+  hidden INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );`)
-	return err
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) countItems() (int, error) {
@@ -143,8 +153,8 @@ func (s *Store) update(item Item) error {
 	createdAt := now.Format(time.RFC3339Nano)
 	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
 	_, err := s.db.Exec(`
-INSERT INTO items(id,title,sub_note,x,y,color,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?)
+INSERT INTO items(id,title,sub_note,x,y,color,hidden,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   sub_note=excluded.sub_note,
@@ -152,7 +162,7 @@ ON CONFLICT(id) DO UPDATE SET
   y=excluded.y,
   color=excluded.color,
   updated_at=excluded.updated_at;
-`, item.ID, item.Title, item.SubNote, item.X, item.Y, item.Color, createdAt, now.Format(time.RFC3339Nano))
+`, item.ID, item.Title, item.SubNote, item.X, item.Y, item.Color, 0, createdAt, now.Format(time.RFC3339Nano))
 	return err
 }
 
@@ -161,8 +171,47 @@ func (s *Store) delete(id string) error {
 	return err
 }
 
+func (s *Store) hide(id string) error {
+	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), id)
+	return err
+}
+
+func (s *Store) hiddenCount() (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1`).Scan(&n)
+	return n, err
+}
+
+func (s *Store) revealAllHidden() ([]Item, error) {
+	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=1 ORDER BY updated_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		var it Item
+		var updated string
+		if err := rows.Scan(&it.ID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+			it.UpdatedAt = t
+		}
+		out = append(out, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := time.Now().Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1`, now); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (s *Store) snapshot() ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=0 ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -211,6 +260,8 @@ func main() {
 	mux.HandleFunc("/", app.home)
 	mux.HandleFunc("/api/items", app.itemsAPI)
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
+	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
+	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -231,8 +282,13 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	hiddenN, err := a.store.hiddenCount()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b)})
+	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN})
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -279,6 +335,45 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
+}
+
+
+func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct { ID string `json:"id"` }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.hide(in.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	hiddenN, _ := a.store.hiddenCount()
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
+}
+
+func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := a.store.revealAllHidden()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
 }
 
 func fileExists(path string) bool {

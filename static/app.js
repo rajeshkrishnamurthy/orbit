@@ -2,6 +2,7 @@
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
   const items = window.__ITEMS__ || [];
+  let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let activePin = null;
   let undoState = null;
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
@@ -20,6 +21,21 @@
     };
     toolbar.appendChild(b);
   });
+
+  const hiddenBtn = document.createElement('button');
+  hiddenBtn.className = 'hidden-toggle';
+  hiddenBtn.id = 'hidden-toggle';
+  hiddenBtn.onclick = async () => {
+    if (hiddenCount <= 0) return;
+    const res = await fetch('/api/items/reveal-all', {method:'POST'});
+    const data = await res.json();
+    (data.items || []).forEach(it => {
+      if (!surface.querySelector(`.pin[data-id="${it.id}"]`)) createPin(it, false, true);
+    });
+    hiddenCount = data.hiddenCount || 0;
+    renderHiddenButton();
+  };
+  toolbar.appendChild(hiddenBtn);
 
   const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
@@ -92,6 +108,13 @@
     });
   }
 
+  function renderHiddenButton(){
+    const btn = document.getElementById('hidden-toggle');
+    if (!btn) return;
+    btn.textContent = `Hidden (${hiddenCount})`;
+    btn.hidden = hiddenCount <= 0;
+  }
+
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
 
   function selectedPaletteColor(){
@@ -128,6 +151,20 @@
         markPersisted(pin);
       });
     }, 180));
+  }
+
+  function hidePinImmediate(pin){
+    fetch('/api/items/hide', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id: pin.dataset.id})
+    }).then(async (r) => {
+      const d = await r.json();
+      hiddenCount = d.hiddenCount || (hiddenCount + 1);
+      renderHiddenButton();
+    });
+    if (activePin === pin) setActivePin(null);
+    pin.remove();
   }
 
   function deletePinImmediate(pin){
@@ -200,6 +237,16 @@
 
   function bindPin(pin){
     const del = pin.querySelector('.pin-delete');
+    const hide = pin.querySelector('.pin-hide');
+    if (hide) {
+      hide.addEventListener('pointerdown', ev => ev.stopPropagation());
+      hide.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (pin.dataset.saved !== 'true') return;
+        hidePinImmediate(pin);
+      });
+    }
     if (del) {
       del.addEventListener('pointerdown', ev => ev.stopPropagation());
       del.addEventListener('click', ev => {
@@ -313,7 +360,7 @@
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
-    pin.innerHTML = `<button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><textarea rows="2">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    pin.innerHTML = `<button class="pin-hide" aria-label="Hide card" title="Hide">–</button><button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><textarea rows="2">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
@@ -342,6 +389,7 @@
   });
 
   if (surface.querySelector('.pin')) setActivePin(surface.querySelector('.pin'));
+  renderHiddenButton();
 
   window.addEventListener('resize', () => surface.querySelectorAll('.pin').forEach(applyDistanceStyle));
 })();
