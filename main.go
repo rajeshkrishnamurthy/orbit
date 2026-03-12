@@ -37,11 +37,16 @@ func newStore(dbPath string) (*Store, error) {
 
 	hadDB := fileExists(dbPath)
 	initializedFlag := filepath.Join(filepath.Dir(dbPath), ".orbit_initialized")
-	jsonPath := filepath.Join(filepath.Dir(dbPath), "items.json")
+	legacyJSON := filepath.Join(filepath.Dir(dbPath), "items.json")
+
+	// Split-brain guard: runtime must not use active JSON alongside SQLite.
+	if fileExists(legacyJSON) {
+		return nil, errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
+	}
 
 	if hadDB {
 		_ = backupDB(dbPath)
-	} else if fileExists(initializedFlag) && !fileExists(jsonPath) {
+	} else if fileExists(initializedFlag) {
 		return nil, errors.New("orbit.db missing after initialization; refusing to reseed and risk state loss")
 	}
 
@@ -61,16 +66,12 @@ func newStore(dbPath string) (*Store, error) {
 	}
 
 	if count == 0 {
-		if fileExists(jsonPath) {
-			if err := s.importJSON(jsonPath); err != nil {
-				return nil, err
-			}
-		} else if !fileExists(initializedFlag) {
+		if !hadDB && !fileExists(initializedFlag) {
 			if err := s.seedDefaults(); err != nil {
 				return nil, err
 			}
-		} else if !hadDB {
-			return nil, errors.New("orbit.db missing and no JSON source; refusing to reseed existing user")
+		} else {
+			return nil, errors.New("sqlite is empty in an initialized environment; refusing silent reset")
 		}
 	}
 
