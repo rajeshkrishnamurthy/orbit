@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>The Orbit</title>
+  <link rel="stylesheet" href="/static/styles.css"/>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+</head>
+<body>
+  <div class="wrap">
+    <h1>The Orbit</h1>
+    <p class="sub">Drop-to-place strategic surface — position is truth.</p>
+    <div class="surface" id="surface">
+      <div class="orbit o1"></div><div class="orbit o2"></div><div class="orbit o3"></div><div class="orbit o4"></div>
+      <div class="toolbar" id="toolbar"></div>
+      <div class="hint">Drop anywhere and it stays there. Colors change card fill.</div>
+    </div>
+  </div>
+  <script>window.__ITEMS__ = {{.ItemsJSON}};</script>
+  <script src="/static/app.js"></script>
+</body></html>

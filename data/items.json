@@ -1,0 +1,47 @@
+[
+  {
+    "id": "i1",
+    "title": "Equitas upgrade",
+    "subNote": "Capital decision window",
+    "x": 712,
+    "y": 334,
+    "color": "var(--c1)",
+    "updatedAt": "2026-03-12T20:41:22.189504+05:30"
+  },
+  {
+    "id": "i2",
+    "title": "DBS rate negotiation",
+    "subNote": "Call when treasury opens",
+    "x": 620,
+    "y": 380,
+    "color": "var(--c2)",
+    "updatedAt": "2026-03-12T19:42:17.158869+05:30"
+  },
+  {
+    "id": "i3",
+    "title": "Credit line reset",
+    "subNote": "After DBS close",
+    "x": 880,
+    "y": 430,
+    "color": "var(--c3)",
+    "updatedAt": "2026-03-12T19:42:17.158869+05:30"
+  },
+  {
+    "id": "i4",
+    "title": "Insurance reshuffle",
+    "subNote": "Risk optimization",
+    "x": 480,
+    "y": 280,
+    "color": "var(--c4)",
+    "updatedAt": "2026-03-12T19:42:17.158869+05:30"
+  },
+  {
+    "id": "i5",
+    "title": "Family trust structure",
+    "subNote": "Long-horizon architecture",
+    "x": 360,
+    "y": 460,
+    "color": "var(--c5)",
+    "updatedAt": "2026-03-12T19:42:17.158869+05:30"
+  }
+]
