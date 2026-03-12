@@ -3,6 +3,7 @@
   const toolbar = document.getElementById('toolbar');
   const items = window.__ITEMS__ || [];
   let activePin = null;
+  let undoState = null;
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
   toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Item color</span>';
@@ -34,6 +35,12 @@
     return m ? {r:+m[1],g:+m[2],b:+m[3]} : {r:80,g:100,b:150};
   }
 
+  function setActivePin(pin){
+    activePin = pin;
+    surface.querySelectorAll('.pin').forEach(p => p.classList.toggle('selected', p === pin));
+    refreshSwatches();
+  }
+
   function setPinColor(pin, color){
     pin.style.background = color;
     pin.dataset.color = color;
@@ -41,12 +48,15 @@
     const luminance = (0.2126*rgb.r + 0.7152*rgb.g + 0.0722*rgb.b)/255;
     const titleEl = pin.querySelector('.pin-title input');
     const noteEl = pin.querySelector('.pin-note input');
+    const delEl = pin.querySelector('.pin-delete');
     if (luminance > 0.62){
       titleEl.style.color = '#0f1b2d';
       noteEl.style.color = '#1f2d45';
+      if (delEl) delEl.style.color = '#22395c';
     } else {
       titleEl.style.color = '#fff';
       noteEl.style.color = '#eaf0ff';
+      if (delEl) delEl.style.color = '#f5f8ff';
     }
   }
 
@@ -94,8 +104,62 @@
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
+      }).then(() => {
+        pin.dataset.saved = 'true';
       });
     }, 180));
+  }
+
+  function deletePinImmediate(pin){
+    const payload = {
+      id: pin.dataset.id,
+      title: pin.querySelector('.pin-title input').value,
+      subNote: pin.querySelector('.pin-note input').value,
+      x: parseFloat(pin.style.left) || 0,
+      y: parseFloat(pin.style.top) || 0,
+      color: pin.dataset.color || 'var(--c1)'
+    };
+
+    fetch('/api/items/delete', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id: payload.id})
+    });
+
+    if (activePin === pin) setActivePin(null);
+    pin.remove();
+    showUndo(payload);
+  }
+
+  function clearUndo(){
+    if (!undoState) return;
+    clearTimeout(undoState.timer);
+    undoState.el.remove();
+    undoState = null;
+  }
+
+  function showUndo(payload){
+    clearUndo();
+    const el = document.createElement('div');
+    el.className = 'undo-toast';
+    el.innerHTML = '<span>Card deleted</span><button class="undo-btn">Undo</button>';
+    const btn = el.querySelector('.undo-btn');
+    btn.addEventListener('click', () => {
+      createPin(payload, false, true);
+      fetch('/api/items', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      clearUndo();
+    });
+    surface.appendChild(el);
+    undoState = {
+      el,
+      timer: setTimeout(() => {
+        clearUndo();
+      }, 4000)
+    };
   }
 
   function discardIfEmpty(pin){
@@ -109,18 +173,25 @@
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id: pin.dataset.id})
       });
-      if (activePin === pin) {
-        activePin = null;
-        refreshSwatches();
-      }
+      if (activePin === pin) setActivePin(null);
       pin.remove();
     }, 130);
   }
 
   function bindPin(pin){
+    const del = pin.querySelector('.pin-delete');
+    if (del) {
+      del.addEventListener('pointerdown', ev => ev.stopPropagation());
+      del.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (pin.dataset.saved !== 'true') return;
+        deletePinImmediate(pin);
+      });
+    }
+
     pin.addEventListener('pointerdown', (e) => {
-      activePin = pin;
-      refreshSwatches();
+      setActivePin(pin);
       pin.classList.add('dragging');
       pin.setPointerCapture(e.pointerId);
       const rect = pin.getBoundingClientRect();
@@ -156,7 +227,7 @@
     pin.querySelectorAll('input').forEach(input => {
       input.addEventListener('pointerdown', ev => ev.stopPropagation());
       input.addEventListener('input', () => { applyDistanceStyle(pin); savePin(pin); });
-      input.addEventListener('focus', () => { activePin = pin; refreshSwatches(); });
+      input.addEventListener('focus', () => setActivePin(pin));
       input.addEventListener('blur', () => {
         setTimeout(() => {
           const focusedInside = pin.contains(document.activeElement);
@@ -166,19 +237,19 @@
     });
   }
 
-  function createPin(item, focusTitle = false){
+  function createPin(item, focusTitle = false, markSaved = false){
     const pin = document.createElement('article');
     pin.className = 'pin';
     pin.dataset.id = item.id;
+    pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
-    pin.innerHTML = `<label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><input value="${(item.subNote||'').replace(/"/g,'&quot;')}" /></label>`;
+    pin.innerHTML = `<button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><input value="${(item.subNote||'').replace(/"/g,'&quot;')}" /></label>`;
     surface.appendChild(pin);
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
     bindPin(pin);
-    activePin = pin;
-    refreshSwatches();
+    setActivePin(pin);
     if (focusTitle) {
       const titleInput = pin.querySelector('.pin-title input');
       titleInput.focus();
@@ -187,22 +258,18 @@
     return pin;
   }
 
-  items.forEach((item) => createPin(item, false));
+  items.forEach((item) => createPin(item, false, true));
 
   surface.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint')) return;
+    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast')) return;
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    const pin = createPin({id: uid(), title: '', subNote: '', x, y, color: 'var(--c1)'}, true);
-    // no immediate save; save begins once user types/moves/colors. Empty blur discards.
+    createPin({id: uid(), title: '', subNote: '', x, y, color: 'var(--c1)'}, true, false);
     e.preventDefault();
   });
 
-  if (surface.querySelector('.pin')) {
-    activePin = surface.querySelector('.pin');
-    refreshSwatches();
-  }
+  if (surface.querySelector('.pin')) setActivePin(surface.querySelector('.pin'));
 
   window.addEventListener('resize', () => surface.querySelectorAll('.pin').forEach(applyDistanceStyle));
 })();
