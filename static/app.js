@@ -205,14 +205,23 @@
 
     pin.addEventListener('pointerdown', (e) => {
       setActivePin(pin);
-      pin.classList.add('dragging');
-      pin.setPointerCapture(e.pointerId);
       const rect = pin.getBoundingClientRect();
       const surfRect = surface.getBoundingClientRect();
       const offsetX = e.clientX - rect.left;
       const offsetY = e.clientY - rect.top;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragging = false;
 
       const onMove = (ev) => {
+        const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
+        if (!dragging && dist < 3) return;
+        if (!dragging) {
+          dragging = true;
+          pin.classList.add('dragging');
+          pin.setPointerCapture(e.pointerId);
+          if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
+        }
         const w = pin.offsetWidth || rect.width;
         const h = pin.offsetHeight || rect.height;
         const x = ev.clientX - surfRect.left - offsetX;
@@ -223,13 +232,15 @@
       };
 
       const onUp = (ev) => {
-        pin.classList.remove('dragging');
-        pin.releasePointerCapture(ev.pointerId);
+        if (dragging) {
+          pin.classList.remove('dragging');
+          pin.releasePointerCapture(ev.pointerId);
+          applyDistanceStyle(pin);
+          savePin(pin); // no snap/reassign/normalize
+        }
         pin.removeEventListener('pointermove', onMove);
         pin.removeEventListener('pointerup', onUp);
         pin.removeEventListener('pointercancel', onUp);
-        applyDistanceStyle(pin);
-        savePin(pin); // no snap/reassign/normalize
       };
 
       pin.addEventListener('pointermove', onMove);
@@ -238,7 +249,6 @@
     });
 
     pin.querySelectorAll('input, textarea').forEach(input => {
-      input.addEventListener('pointerdown', ev => ev.stopPropagation());
       input.addEventListener('input', () => {
         if (input.tagName === 'TEXTAREA') { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 42) + 'px'; }
         applyDistanceStyle(pin);
