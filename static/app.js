@@ -25,6 +25,13 @@
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
   function proximityFactor(d){ const t = Math.min(1, d / maxR()); return 1 - t; }
 
+  function fitNoteHeight(noteEl){
+    if (!noteEl) return;
+    noteEl.style.height = 'auto';
+    const h = Math.max(18, Math.min(noteEl.scrollHeight, 36));
+    noteEl.style.height = h + 'px';
+  }
+
   function resolveCssColorToRgb(cssColor){
     const probe = document.createElement('span');
     probe.style.color = cssColor;
@@ -250,7 +257,7 @@
 
     pin.querySelectorAll('input, textarea').forEach(input => {
       input.addEventListener('input', () => {
-        if (input.tagName === 'TEXTAREA') { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 42) + 'px'; }
+        if (input.tagName === 'TEXTAREA') fitNoteHeight(input);
         applyDistanceStyle(pin);
         savePin(pin);
       });
@@ -285,8 +292,7 @@
           const noteInput = pin.querySelector('.pin-note textarea');
           titleInput.value = pin.dataset.persistedTitle || '';
           noteInput.value = pin.dataset.persistedSubNote || '';
-          noteInput.style.height = 'auto';
-          noteInput.style.height = Math.min(noteInput.scrollHeight, 42) + 'px';
+          fitNoteHeight(noteInput);
           applyDistanceStyle(pin);
           input.blur();
         }
@@ -314,7 +320,7 @@
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
     bindPin(pin);
-    const ta = pin.querySelector('.pin-note textarea'); if (ta) { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,42)+'px'; }
+    const ta = pin.querySelector('.pin-note textarea'); fitNoteHeight(ta);
     setActivePin(pin);
     if (focusTitle) {
       const titleInput = pin.querySelector('.pin-title input');
