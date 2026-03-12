@@ -3,6 +3,7 @@
   const toolbar = document.getElementById('toolbar');
   const items = window.__ITEMS__ || [];
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
+  let lens = 'all';
   let activePin = null;
   let undoState = null;
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
@@ -34,8 +35,25 @@
     });
     hiddenCount = data.hiddenCount || 0;
     renderHiddenButton();
+    applyLens();
   };
   toolbar.appendChild(hiddenBtn);
+
+  const lensWrap = document.createElement('div');
+  lensWrap.className = 'lens-toggle';
+  ['all','center','periphery'].forEach(name => {
+    const b = document.createElement('button');
+    b.className = 'lens-btn';
+    b.dataset.lens = name;
+    b.textContent = name[0].toUpperCase() + name.slice(1);
+    b.onclick = () => {
+      lens = name;
+      renderLensButtons();
+      applyLens();
+    };
+    lensWrap.appendChild(b);
+  });
+  toolbar.appendChild(lensWrap);
 
   const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
@@ -113,6 +131,27 @@
     if (!btn) return;
     btn.textContent = `Hidden (${hiddenCount})`;
     btn.hidden = hiddenCount <= 0;
+  }
+
+  function renderLensButtons(){
+    document.querySelectorAll('.lens-btn').forEach(b => b.classList.toggle('active', b.dataset.lens === lens));
+  }
+
+  function inLens(pin){
+    if (lens === 'all') return true;
+    const w = pin.offsetWidth || 180, h = pin.offsetHeight || 72;
+    const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
+    const c = center();
+    const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
+    const cutoff = maxR() * 0.48;
+    if (lens === 'center') return d <= cutoff;
+    return d > cutoff;
+  }
+
+  function applyLens(){
+    surface.querySelectorAll('.pin').forEach(pin => {
+      pin.style.display = inLens(pin) ? '' : 'none';
+    });
   }
 
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -283,6 +322,7 @@
         pin.style.left = Math.max(6, Math.min(surface.clientWidth - w - 6, x)) + 'px';
         pin.style.top = Math.max(6, Math.min(surface.clientHeight - h - 6, y)) + 'px';
         applyDistanceStyle(pin);
+        pin.style.display = inLens(pin) ? '' : 'none';
       };
 
       const onUp = (ev) => {
@@ -367,6 +407,7 @@
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
     bindPin(pin);
+    pin.style.display = inLens(pin) ? '' : 'none';
     const ta = pin.querySelector('.pin-note textarea'); fitNoteHeight(ta);
     setActivePin(pin);
     if (focusTitle) {
@@ -390,6 +431,8 @@
 
   if (surface.querySelector('.pin')) setActivePin(surface.querySelector('.pin'));
   renderHiddenButton();
+  renderLensButtons();
+  applyLens();
 
-  window.addEventListener('resize', () => surface.querySelectorAll('.pin').forEach(applyDistanceStyle));
+  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); });
 })();
