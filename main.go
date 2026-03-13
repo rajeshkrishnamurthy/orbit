@@ -223,6 +223,27 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 	return n, err
 }
 
+
+func (s *Store) hiddenItems(contextID string) ([]Item, error) {
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	if err != nil { return nil, err }
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		var it Item
+		var updated string
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil { return nil, err }
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { it.UpdatedAt = t }
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) unhideAt(id, contextID string, x, y float64) error {
+	_, err := s.db.Exec(`UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
+	return err
+}
+
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
@@ -361,6 +382,8 @@ func main() {
 	mux.HandleFunc("/api/items", app.itemsAPI)
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
+	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
+	mux.HandleFunc("/api/items/unhide-at", app.unhideAtAPI)
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
@@ -492,6 +515,34 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 
+
+
+func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	var in struct { ContextID string `json:"contextId"` }
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	items, err := a.store.hiddenItems(in.ContextID)
+	if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	b, _ := json.Marshal(map[string]any{"ok": true, "items": items})
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
+func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	var in struct {
+		ID string `json:"id"`
+		ContextID string `json:"contextId"`
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	if in.ID == "" { http.Error(w, "id required", http.StatusBadRequest); return }
+	if err := a.store.unhideAt(in.ID, in.ContextID, in.X, in.Y); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	hiddenN, _ := a.store.hiddenCount(in.ContextID)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
+}
 
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }

@@ -13,6 +13,8 @@
   const lensExempt = new Set();
   let activePin = null;
   let undoState = null;
+  let trayOpen = false;
+  let hiddenItemsCache = [];
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
   toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Item color</span>';
@@ -62,18 +64,17 @@
   hiddenBtn.id = 'hidden-toggle';
   hiddenBtn.onclick = async () => {
     if (mode !== 'focus' || hiddenCount <= 0) return;
-    const res = await fetch('/api/items/reveal-all', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
-    const data = await res.json();
-    (data.items || []).forEach(it => {
-      if (!surface.querySelector(`.pin[data-id="${it.id}"]`)) createPin(it, false, true);
-    });
-    hiddenCount = data.hiddenCount || 0;
-    renderHiddenButton();
-    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
-    applyLens();
+    trayOpen = !trayOpen;
+    if (trayOpen) await openHiddenTray();
+    else closeHiddenTray();
   };
   toolbar.appendChild(hiddenBtn);
   if (mode !== 'focus') hiddenBtn.hidden = true;
+
+  const hiddenTray = document.createElement('div');
+  hiddenTray.className = 'hidden-tray';
+  hiddenTray.hidden = true;
+  surface.appendChild(hiddenTray);
 
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
@@ -193,6 +194,31 @@
     });
   }
 
+  function closeHiddenTray(){
+    hiddenTray.hidden = true;
+    hiddenTray.innerHTML = '';
+    trayOpen = false;
+  }
+
+  async function openHiddenTray(){
+    const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
+    const data = await res.json();
+    hiddenItemsCache = data.items || [];
+    hiddenTray.innerHTML = '';
+    hiddenItemsCache.forEach(it => {
+      const t = document.createElement('div');
+      t.className = 'hidden-tray-item';
+      t.textContent = it.title || 'Untitled';
+      t.draggable = true;
+      t.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
+      });
+      hiddenTray.appendChild(t);
+    });
+    hiddenTray.hidden = false;
+    trayOpen = true;
+  }
+
   function renderHiddenButton(){
     const btn = document.getElementById('hidden-toggle');
     if (!btn) return;
@@ -285,6 +311,7 @@
       const d = await r.json();
       hiddenCount = d.hiddenCount || (hiddenCount + 1);
       renderHiddenButton();
+      if (trayOpen) openHiddenTray();
     });
     lensExempt.delete(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
@@ -532,8 +559,32 @@
 
   items.forEach((item) => createPin(item, false, true));
 
+
+  surface.addEventListener('dragover', (e) => {
+    if (!trayOpen) return;
+    if (e.dataTransfer && e.dataTransfer.types.includes('text/orbit-hidden-id')) e.preventDefault();
+  });
+
+  surface.addEventListener('drop', async (e) => {
+    const id = e.dataTransfer && e.dataTransfer.getData('text/orbit-hidden-id');
+    if (!id) return;
+    e.preventDefault();
+    const rect = surface.getBoundingClientRect();
+    const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
+    const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
+    const item = hiddenItemsCache.find(i => i.id === id);
+    if (!item) return;
+    await fetch('/api/items/unhide-at', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, contextId: currentContextId, x, y})});
+    item.x = x; item.y = y;
+    if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(item, false, true);
+    hiddenItemsCache = hiddenItemsCache.filter(i => i.id !== id);
+    hiddenCount = Math.max(0, hiddenCount - 1);
+    renderHiddenButton();
+    if (hiddenItemsCache.length === 0) closeHiddenTray();
+  });
+
   surface.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head')) return;
+    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray')) return;
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
