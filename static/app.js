@@ -127,10 +127,19 @@
     const c = center();
     const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
     const p = proximityFactor(d);
-    const cardScale = 0.92 + (p * 0.20);
-    const titleSize = 12 + (p * 3.2);
-    const bodySize = 10.5 + (p * 1.6);
-    const titleWt = Math.round(540 + (p * 140));
+    let cardScale = 0.92 + (p * 0.20);
+    let titleSize = 12 + (p * 3.2);
+    let bodySize = 10.5 + (p * 1.6);
+    let titleWt = Math.round(540 + (p * 140));
+
+    // Periphery lens readability lift: subtle floor for attended outer cards.
+    if (lens === 'periphery' && inLens(pin)) {
+      cardScale = Math.max(cardScale, 0.97);
+      titleSize = Math.max(titleSize, 12.8);
+      bodySize = Math.max(bodySize, 11.1);
+      titleWt = Math.max(titleWt, 590);
+    }
+
     pin.style.transform = `scale(${cardScale.toFixed(3)})`;
     const title = pin.querySelector('.pin-title input');
     const note = pin.querySelector('.pin-note textarea');
