@@ -4,6 +4,7 @@
   const items = window.__ITEMS__ || [];
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
+  const lensExempt = new Set();
   let activePin = null;
   let undoState = null;
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
@@ -48,6 +49,7 @@
     b.textContent = name[0].toUpperCase() + name.slice(1);
     b.onclick = () => {
       lens = name;
+      lensExempt.clear(); // explicit lens re-application
       renderLensButtons();
       applyLens();
     };
@@ -150,7 +152,9 @@
 
   function applyLens(){
     surface.querySelectorAll('.pin').forEach(pin => {
-      pin.style.display = inLens(pin) ? '' : 'none';
+      const id = pin.dataset.id;
+      const visible = lens === 'all' || lensExempt.has(id) || inLens(pin);
+      pin.style.display = visible ? '' : 'none';
     });
   }
 
@@ -202,6 +206,7 @@
       hiddenCount = d.hiddenCount || (hiddenCount + 1);
       renderHiddenButton();
     });
+    lensExempt.delete(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
     pin.remove();
   }
@@ -222,6 +227,7 @@
       body:JSON.stringify({id: payload.id})
     });
 
+    lensExempt.delete(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
     pin.remove();
     showUndo(payload);
@@ -322,7 +328,7 @@
         pin.style.left = Math.max(6, Math.min(surface.clientWidth - w - 6, x)) + 'px';
         pin.style.top = Math.max(6, Math.min(surface.clientHeight - h - 6, y)) + 'px';
         applyDistanceStyle(pin);
-        pin.style.display = inLens(pin) ? '' : 'none';
+        pin.style.display = ''; // active card exempt while manipulating
       };
 
       const onUp = (ev) => {
@@ -397,6 +403,7 @@
     const pin = document.createElement('article');
     pin.className = 'pin';
     pin.dataset.id = item.id;
+    lensExempt.delete(item.id);
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
