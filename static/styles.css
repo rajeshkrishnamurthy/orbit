@@ -2,14 +2,14 @@
 *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui;background:radial-gradient(circle at 50% -10%,var(--bg1) 0,var(--bg2) 55%);color:var(--ink)}
 .wrap{max-width:1300px;margin:16px auto;padding:0 14px} h1{margin:0 0 4px;font-size:22px}.sub{margin:0 0 10px;color:var(--muted)}
 .context-head{display:flex;align-items:center;gap:8px;color:#c6d2f7}
-.context-head.in-canvas{position:absolute;left:12px;top:12px;z-index:21;padding:7px 10px;border-radius:10px;background:rgba(10,14,26,.38);border:1px solid rgba(46,59,104,.6);backdrop-filter:blur(2px)}
+.context-head.in-canvas{position:absolute;left:12px;top:12px;z-index:21;padding:6px 9px;border-radius:10px;background:rgba(10,14,26,.28);border:1px solid rgba(46,59,104,.48);backdrop-filter:blur(2px)}
 .context-link{border:none;background:rgba(42,63,116,.52);color:#dce6ff;width:20px;height:20px;border-radius:999px;cursor:pointer;opacity:.86}
 .context-name{font-size:15px;font-weight:630;letter-spacing:.01em;opacity:.98}
 .surface{position:relative;height:740px;border:1px solid #2c365f;border-radius:20px;background:radial-gradient(circle at center,#18203b 0,#12192f 45%,#0f1527 100%);overflow:hidden}
-.orbit{position:absolute;border:1px dashed var(--line);border-radius:999px;opacity:.35;pointer-events:none}.o1{inset:300px 500px}.o2{inset:220px 400px}.o3{inset:130px 280px}.o4{inset:40px 150px}
-.pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.26);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease;box-shadow:0 10px 20px rgba(8,12,24,.24),inset 0 1px 0 rgba(255,255,255,.16),inset 0 -1px 0 rgba(0,0,0,.12)}
-.pin::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(160deg,rgba(255,255,255,.10) 0%,rgba(255,255,255,.00) 42%,rgba(0,0,0,.05) 100%)}
-.pin::after{content:"";position:absolute;inset:1px;border-radius:10px;pointer-events:none;border:1px solid rgba(255,255,255,.08)}
+.orbit{position:absolute;border:1px dashed rgba(92,108,166,.34);border-radius:999px;opacity:.22;pointer-events:none}.o1{inset:300px 500px}.o2{inset:220px 400px}.o3{inset:130px 280px}.o4{inset:40px 150px}
+.pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease;box-shadow:0 8px 16px rgba(8,12,24,.20),inset 0 1px 0 rgba(255,255,255,.13),inset 0 -1px 0 rgba(0,0,0,.10);filter:saturate(.94)}
+.pin::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(160deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,.00) 42%,rgba(0,0,0,.04) 100%)}
+.pin::after{content:"";position:absolute;inset:1px;border-radius:10px;pointer-events:none;border:1px solid rgba(255,255,255,.06)}
 .pin.dragging{box-shadow:0 16px 30px rgba(8,12,24,.34),inset 0 1px 0 rgba(255,255,255,.18),inset 0 -1px 0 rgba(0,0,0,.14);cursor:grabbing}
 .pin.selected{border-color:rgba(255,255,255,.56);box-shadow:0 16px 30px rgba(8,12,24,.34),0 0 0 1px rgba(226,236,255,.30),0 0 0 8px rgba(180,200,255,.12),inset 0 1px 0 rgba(255,255,255,.24),inset 0 -1px 0 rgba(0,0,0,.16)}
 .pin.discarding{opacity:0;pointer-events:none}
@@ -24,7 +24,7 @@
 .pin-slip{position:absolute;right:8px;bottom:8px;min-width:18px;height:18px;padding:0 6px;border:none;border-radius:999px;background:rgba(22,26,36,.32);color:rgba(236,241,255,.68);font-size:11px;font-weight:700;line-height:18px;display:grid;place-items:center;opacity:.72;pointer-events:auto;cursor:pointer;transition:opacity .12s ease, background .12s ease, color .12s ease, box-shadow .12s ease}
 .pin[data-saved="true"]:hover .pin-delete,.pin[data-saved="true"]:focus-within .pin-delete,.pin.selected[data-saved="true"] .pin-delete,.pin[data-saved="true"]:hover .pin-hide,.pin[data-saved="true"]:focus-within .pin-hide,.pin.selected[data-saved="true"] .pin-hide,.pin[data-saved="true"]:hover .pin-enter,.pin[data-saved="true"]:focus-within .pin-enter,.pin.selected[data-saved="true"] .pin-enter{opacity:.88;pointer-events:auto}
 .pin-delete:hover,.pin-hide:hover,.pin-enter:hover,.pin-slip:hover{background:rgba(0,0,0,.28)}
-.toolbar{position:absolute;right:12px;top:12px;display:flex;gap:8px;align-items:center;background:rgba(10,14,26,.58);border:1px solid #2e3b68;border-radius:10px;padding:8px 10px;backdrop-filter:blur(4px);z-index:20}
+.toolbar{position:absolute;right:12px;top:12px;display:flex;gap:8px;align-items:center;background:rgba(10,14,26,.42);border:1px solid rgba(46,59,104,.62);border-radius:10px;padding:7px 9px;backdrop-filter:blur(3px);z-index:20}
 .sw{width:18px;height:18px;border-radius:999px;border:2px solid rgba(255,255,255,.65);cursor:pointer}.sw.active{outline:2px solid #fff;outline-offset:1px}
 .hidden-toggle{border:none;background:rgba(42,63,116,.75);color:#dce6ff;padding:4px 8px;border-radius:8px;font-size:11px;cursor:pointer}
 .hidden-toggle[hidden]{display:none}
@@ -40,7 +40,7 @@
 .lens-slider{appearance:none;width:90px;height:3px;border-radius:999px;background:rgba(255,255,255,.22);outline:none}
 .lens-slider::-webkit-slider-thumb{appearance:none;width:10px;height:10px;border-radius:50%;background:#cdd8ff;border:1px solid rgba(0,0,0,.2)}
 .lens-slider::-moz-range-thumb{width:10px;height:10px;border-radius:50%;background:#cdd8ff;border:1px solid rgba(0,0,0,.2)}
-.lens-boundary{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:1px dashed rgba(205,216,255,.45);border-radius:999px;pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:3}
+.lens-boundary{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:1px dashed rgba(205,216,255,.30);border-radius:999px;pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:3}
 .lens-boundary.show{opacity:1}
 
 .pin.slipping{border-color:rgba(255,164,136,.62);box-shadow:0 12px 24px rgba(8,12,24,.30),0 0 0 1px rgba(255,164,136,.22),inset 0 1px 0 rgba(255,255,255,.20),inset 0 -1px 0 rgba(0,0,0,.14)}
