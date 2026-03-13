@@ -63,7 +63,7 @@
   hiddenBtn.className = 'hidden-toggle';
   hiddenBtn.id = 'hidden-toggle';
   hiddenBtn.onclick = async () => {
-    if (mode !== 'focus' || hiddenCount <= 0) return;
+    if (mode !== 'focus') return;
     trayOpen = !trayOpen;
     if (trayOpen) await openHiddenTray();
     else closeHiddenTray();
@@ -201,22 +201,31 @@
   }
 
   async function openHiddenTray(){
-    const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
-    const data = await res.json();
-    hiddenItemsCache = data.items || [];
-    hiddenTray.innerHTML = '';
-    hiddenItemsCache.forEach(it => {
-      const t = document.createElement('div');
-      t.className = 'hidden-tray-item';
-      t.textContent = it.title || 'Untitled';
-      t.draggable = true;
-      t.addEventListener('dragstart', (ev) => {
-        ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
-      });
-      hiddenTray.appendChild(t);
-    });
     hiddenTray.hidden = false;
-    trayOpen = true;
+    hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
+    try {
+      const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
+      const data = await res.json();
+      hiddenItemsCache = data.items || [];
+      hiddenTray.innerHTML = '';
+      if (hiddenItemsCache.length === 0) {
+        hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
+      }
+      hiddenItemsCache.forEach(it => {
+        const t = document.createElement('div');
+        t.className = 'hidden-tray-item';
+        t.textContent = it.title || 'Untitled';
+        t.draggable = true;
+        t.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
+        });
+        hiddenTray.appendChild(t);
+      });
+      trayOpen = true;
+    } catch (e) {
+      hiddenTray.innerHTML = '<div class="hidden-tray-empty">Unable to load hidden cards</div>';
+      trayOpen = true;
+    }
   }
 
   function renderHiddenButton(){
