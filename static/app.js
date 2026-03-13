@@ -471,7 +471,8 @@
     const pin = document.createElement('article');
     pin.className = 'pin';
     pin.dataset.id = item.id;
-    lensExempt.delete(item.id);
+    if (markSaved) lensExempt.delete(item.id);
+    else lensExempt.add(item.id);
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
@@ -484,7 +485,7 @@
     setPinColor(pin, item.color || 'var(--c1)');
     applyDistanceStyle(pin);
     bindPin(pin);
-    pin.style.display = inLens(pin) ? '' : 'none';
+    pin.style.display = (!markSaved || lensExempt.has(item.id) || inLens(pin)) ? '' : 'none';
     const ta = pin.querySelector('.pin-note textarea'); fitNoteHeight(ta);
     setActivePin(pin);
     if (focusTitle) {
