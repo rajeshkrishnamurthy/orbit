@@ -175,18 +175,21 @@
     const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
     const c = center();
     const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
-    const p = proximityFactor(d);
-    let cardScale = 0.92 + (p * 0.20);
-    let titleSize = 12 + (p * 3.2);
-    let bodySize = 10.5 + (p * 1.6);
-    let titleWt = Math.round(540 + (p * 140));
+    const cutoff = maxR() * lensRatio;
+    const isCenterBand = d <= cutoff;
+
+    // Band-based sizing (semantic): Center = A, Periphery = B.
+    let cardScale = isCenterBand ? 1.05 : 0.95;
+    let titleSize = isCenterBand ? 14.7 : 12.3;
+    let bodySize = isCenterBand ? 11.7 : 10.7;
+    let titleWt = isCenterBand ? 660 : 560;
 
     // Periphery lens readability lift: subtle floor for attended outer cards.
-    if (mode === 'focus' && lens === 'periphery' && inLens(pin)) {
-      cardScale = Math.max(cardScale, 0.97);
-      titleSize = Math.max(titleSize, 12.8);
+    if (mode === 'focus' && lens === 'periphery' && !isCenterBand) {
+      cardScale = Math.max(cardScale, 0.98);
+      titleSize = Math.max(titleSize, 12.9);
       bodySize = Math.max(bodySize, 11.1);
-      titleWt = Math.max(titleWt, 590);
+      titleWt = Math.max(titleWt, 600);
     }
 
     pin.style.transform = `scale(${cardScale.toFixed(3)})`;
