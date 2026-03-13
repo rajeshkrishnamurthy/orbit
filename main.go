@@ -379,7 +379,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		b, _ := json.Marshal(contexts)
 		cur, _ := a.store.contextByID(ctxID)
-		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": safeContextTitle(cur)})
+		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": safeContextTitle(cur), "PageTitle": "Your Contexts", "HeadingSize": "24px"})
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
@@ -395,7 +395,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title})
+	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "PageTitle": "The Orbit", "HeadingSize": "22px"})
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
