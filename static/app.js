@@ -143,7 +143,7 @@
     const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
     const c = center();
     const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
-    const cutoff = maxR() * 0.48;
+    const cutoff = maxR() * 0.68;
     if (lens === 'center') return d <= cutoff;
     return d > cutoff;
   }
