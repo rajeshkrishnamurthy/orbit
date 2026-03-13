@@ -25,8 +25,12 @@
     });
   }
   if (openContextsEl) {
-    if (mode === 'focus') openContextsEl.onclick = () => { location.href = '/?canvas=contexts&ctx=' + encodeURIComponent(currentContextId); };
-    else openContextsEl.onclick = () => { location.href = '/?ctx=' + encodeURIComponent(currentContextId); };
+    if (mode === 'focus') {
+      openContextsEl.hidden = false;
+      openContextsEl.onclick = () => { location.href = '/?canvas=contexts&ctx=' + encodeURIComponent(currentContextId); };
+    } else {
+      openContextsEl.hidden = true;
+    }
   }
 
   palette.forEach(c => {
