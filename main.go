@@ -19,12 +19,23 @@ import (
 
 type Item struct {
 	ID        string    `json:"id"`
+	ContextID string    `json:"contextId,omitempty"`
 	Title     string    `json:"title"`
 	SubNote   string    `json:"subNote"`
 	X         float64   `json:"x"`
 	Y         float64   `json:"y"`
 	Color     string    `json:"color"`
 	Hidden    bool      `json:"hidden,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type Context struct {
+	ID        string    `json:"id"`
+	Title     string    `json:"title"`
+	SubNote   string    `json:"subNote"`
+	X         float64   `json:"x"`
+	Y         float64   `json:"y"`
+	Color     string    `json:"color"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -67,6 +78,13 @@ func newStore(dbPath string) (*Store, error) {
 		return nil, err
 	}
 
+	if err := s.ensureDefaultContext(); err != nil {
+		return nil, err
+	}
+	if err := s.ensureItemsContext(); err != nil {
+		return nil, err
+	}
+
 	if count == 0 {
 		if !hadDB && !fileExists(initializedFlag) {
 			if err := s.seedDefaults(); err != nil {
@@ -86,8 +104,19 @@ func newStore(dbPath string) (*Store, error) {
 
 func (s *Store) ensureSchema() error {
 	_, err := s.db.Exec(`
+CREATE TABLE IF NOT EXISTS contexts (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  sub_note TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  color TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY,
+  context_id TEXT NOT NULL,
   title TEXT NOT NULL,
   sub_note TEXT NOT NULL,
   x REAL NOT NULL,
@@ -95,9 +124,14 @@ CREATE TABLE IF NOT EXISTS items (
   color TEXT NOT NULL,
   hidden INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
 );`)
 	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN context_id TEXT NOT NULL DEFAULT 'main-orbit'`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
@@ -153,8 +187,8 @@ func (s *Store) update(item Item) error {
 	createdAt := now.Format(time.RFC3339Nano)
 	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
 	_, err := s.db.Exec(`
-INSERT INTO items(id,title,sub_note,x,y,color,hidden,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?)
+INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   sub_note=excluded.sub_note,
@@ -162,7 +196,7 @@ ON CONFLICT(id) DO UPDATE SET
   y=excluded.y,
   color=excluded.color,
   updated_at=excluded.updated_at;
-`, item.ID, item.Title, item.SubNote, item.X, item.Y, item.Color, 0, createdAt, now.Format(time.RFC3339Nano))
+`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, createdAt, now.Format(time.RFC3339Nano))
 	return err
 }
 
@@ -171,19 +205,19 @@ func (s *Store) delete(id string) error {
 	return err
 }
 
-func (s *Store) hide(id string) error {
-	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ?`, time.Now().Format(time.RFC3339Nano), id)
+func (s *Store) hide(id, contextID string) error {
+	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	return err
 }
 
-func (s *Store) hiddenCount() (int, error) {
+func (s *Store) hiddenCount(contextID string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, contextOrDefault(contextID)).Scan(&n)
 	return n, err
 }
 
-func (s *Store) revealAllHidden() ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=1 ORDER BY updated_at DESC`)
+func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +226,7 @@ func (s *Store) revealAllHidden() ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -204,14 +238,14 @@ func (s *Store) revealAllHidden() ([]Item, error) {
 		return nil, err
 	}
 	now := time.Now().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1`, now); err != nil {
+	if _, err := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (s *Store) snapshot() ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=0 ORDER BY updated_at DESC`)
+func (s *Store) snapshot(contextID string) ([]Item, error) {
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +254,7 @@ func (s *Store) snapshot() ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -229,6 +263,65 @@ func (s *Store) snapshot() ([]Item, error) {
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+
+
+func contextOrDefault(id string) string {
+	if id == "" {
+		return "main-orbit"
+	}
+	return id
+}
+
+func (s *Store) ensureDefaultContext() error {
+	now := time.Now().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "main-orbit", "Main Orbit", "", 760.0, 320.0, "var(--c1)", now, now)
+	return err
+}
+
+func (s *Store) ensureItemsContext() error {
+	_, err := s.db.Exec(`UPDATE items SET context_id='main-orbit' WHERE context_id IS NULL OR context_id=''`)
+	return err
+}
+
+func (s *Store) contexts() ([]Context, error) {
+	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts ORDER BY updated_at DESC`)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	out := []Context{}
+	for rows.Next() {
+		var c Context
+		var updated string
+		if err := rows.Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated); err != nil { return nil, err }
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { c.UpdatedAt = t }
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) contextByID(id string) (*Context, error) {
+	id = contextOrDefault(id)
+	var c Context
+	var updated string
+	err := s.db.QueryRow(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts WHERE id=?`, id).Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated)
+	if err != nil { return nil, err }
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { c.UpdatedAt = t }
+	return &c, nil
+}
+
+func (s *Store) upsertContext(c Context) error {
+	now := time.Now().Format(time.RFC3339Nano)
+	created := now
+	_ = s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	_, err := s.db.Exec(`INSERT INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,sub_note=excluded.sub_note,x=excluded.x,y=excluded.y,color=excluded.color,updated_at=excluded.updated_at`, c.ID, c.Title, c.SubNote, c.X, c.Y, c.Color, created, now)
+	return err
+}
+
+func (s *Store) deleteContext(id string) error {
+	if id == "main-orbit" { return errors.New("cannot delete Main Orbit") }
+	_, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
+	return err
 }
 
 type App struct {
@@ -262,6 +355,8 @@ func main() {
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
+	mux.HandleFunc("/api/contexts", app.contextsAPI)
+	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -277,18 +372,30 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	items, err := a.store.snapshot()
+	canvas := r.URL.Query().Get("canvas")
+	ctxID := contextOrDefault(r.URL.Query().Get("ctx"))
+	if canvas == "contexts" {
+		contexts, err := a.store.contexts()
+		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		b, _ := json.Marshal(contexts)
+		cur, _ := a.store.contextByID(ctxID)
+		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": safeContextTitle(cur)})
+		return
+	}
+	cur, err := a.store.contextByID(ctxID)
+	if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	items, err := a.store.snapshot(ctxID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, err := a.store.hiddenCount()
+	hiddenN, err := a.store.hiddenCount(ctxID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN})
+	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title})
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -343,7 +450,7 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct { ID string `json:"id"` }
+	var in struct { ID string `json:"id"`; ContextID string `json:"contextId"` }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -352,11 +459,11 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.hide(in.ID); err != nil {
+	if err := a.store.hide(in.ID, in.ContextID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, _ := a.store.hiddenCount()
+	hiddenN, _ := a.store.hiddenCount(in.ContextID)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
 }
@@ -366,7 +473,9 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	items, err := a.store.revealAllHidden()
+	var in struct { ContextID string `json:"contextId"` }
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	items, err := a.store.revealAllHidden(in.ContextID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -374,6 +483,35 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	b, _ := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
+}
+
+
+
+func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	var c Context
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	if c.ID == "" { c.ID = fmt.Sprintf("c_%d", time.Now().UnixNano()) }
+	if c.Title == "" { c.Title = "Untitled context" }
+	if c.Color == "" { c.Color = "var(--c1)" }
+	if err := a.store.upsertContext(c); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`))
+}
+
+func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	var in struct { ID string `json:"id"` }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	if in.ID == "" { http.Error(w, "id required", http.StatusBadRequest); return }
+	if err := a.store.deleteContext(in.ID); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func safeContextTitle(c *Context) string {
+	if c == nil || c.Title == "" { return "Main Orbit" }
+	return c.Title
 }
 
 func fileExists(path string) bool {

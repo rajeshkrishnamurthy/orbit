@@ -8,6 +8,10 @@
 </head>
 <body>
   <div class="wrap">
+    <div class="context-head">
+      <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
+      <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
+    </div>
     <h1>The Orbit</h1>
     <p class="sub">Drop-to-place strategic surface — position is truth.</p>
     <div class="surface" id="surface">
@@ -16,6 +20,12 @@
       <div class="hint">Drop anywhere and it stays there. Colors change card fill.</div>
     </div>
   </div>
-  <script>window.__ITEMS__ = {{.ItemsJSON}}; window.__HIDDEN_COUNT__ = {{.HiddenCount}};</script>
+  <script>
+    window.__ITEMS__ = {{.ItemsJSON}};
+    window.__HIDDEN_COUNT__ = {{.HiddenCount}};
+    window.__MODE__ = "{{.Mode}}";
+    window.__CURRENT_CONTEXT_ID__ = "{{.CurrentContextID}}";
+    window.__CURRENT_CONTEXT_TITLE__ = "{{.CurrentContextTitle}}";
+  </script>
   <script src="/static/app.js"></script>
 </body></html>

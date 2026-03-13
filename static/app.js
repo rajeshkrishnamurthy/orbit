@@ -5,6 +5,8 @@
   boundaryEl.className = 'lens-boundary';
   surface.appendChild(boundaryEl);
   const items = window.__ITEMS__ || [];
+  const mode = window.__MODE__ || 'focus';
+  const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
   let lensRatio = 0.68;
@@ -14,6 +16,19 @@
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
   toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Item color</span>';
+  const contextNameEl = document.getElementById('context-name');
+  const openContextsEl = document.getElementById('open-contexts');
+  if (mode === 'focus' && contextNameEl) {
+    contextNameEl.contentEditable = 'true';
+    contextNameEl.addEventListener('blur', () => {
+      fetch('/api/contexts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: currentContextId, title: contextNameEl.textContent || 'Main Orbit'})});
+    });
+  }
+  if (openContextsEl) {
+    if (mode === 'focus') openContextsEl.onclick = () => { location.href = '/?canvas=contexts&ctx=' + encodeURIComponent(currentContextId); };
+    else openContextsEl.onclick = () => { location.href = '/?ctx=' + encodeURIComponent(currentContextId); };
+  }
+
   palette.forEach(c => {
     const b = document.createElement('button');
     b.className = 'sw';
@@ -32,8 +47,8 @@
   hiddenBtn.className = 'hidden-toggle';
   hiddenBtn.id = 'hidden-toggle';
   hiddenBtn.onclick = async () => {
-    if (hiddenCount <= 0) return;
-    const res = await fetch('/api/items/reveal-all', {method:'POST'});
+    if (mode !== 'focus' || hiddenCount <= 0) return;
+    const res = await fetch('/api/items/reveal-all', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
     const data = await res.json();
     (data.items || []).forEach(it => {
       if (!surface.querySelector(`.pin[data-id="${it.id}"]`)) createPin(it, false, true);
@@ -44,6 +59,7 @@
     applyLens();
   };
   toolbar.appendChild(hiddenBtn);
+  if (mode !== 'focus') hiddenBtn.hidden = true;
 
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
@@ -136,7 +152,7 @@
     let titleWt = Math.round(540 + (p * 140));
 
     // Periphery lens readability lift: subtle floor for attended outer cards.
-    if (lens === 'periphery' && inLens(pin)) {
+    if (mode === 'focus' && lens === 'periphery' && inLens(pin)) {
       cardScale = Math.max(cardScale, 0.97);
       titleSize = Math.max(titleSize, 12.8);
       bodySize = Math.max(bodySize, 11.1);
@@ -220,6 +236,7 @@
     const id = pin.dataset.id;
     const payload = {
       id,
+      contextId: currentContextId,
       title: pin.querySelector('.pin-title input').value,
       subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
@@ -228,7 +245,7 @@
     };
     clearTimeout(pending.get(id));
     pending.set(id, setTimeout(() => {
-      fetch('/api/items', {
+      fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
@@ -243,7 +260,7 @@
     fetch('/api/items/hide', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id: pin.dataset.id})
+      body:JSON.stringify({id: pin.dataset.id, contextId: currentContextId})
     }).then(async (r) => {
       const d = await r.json();
       hiddenCount = d.hiddenCount || (hiddenCount + 1);
@@ -264,7 +281,7 @@
       color: pin.dataset.color || 'var(--c1)'
     };
 
-    fetch('/api/items/delete', {
+    fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({id: payload.id})
@@ -273,7 +290,7 @@
     lensExempt.delete(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
     pin.remove();
-    showUndo(payload);
+    if (mode === 'focus') showUndo(payload);
   }
 
   function clearUndo(){
@@ -291,7 +308,7 @@
     const btn = el.querySelector('.undo-btn');
     btn.addEventListener('click', () => {
       createPin(payload, false, true);
-      fetch('/api/items', {
+      fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
@@ -313,10 +330,10 @@
     if (title || note) return;
     pin.classList.add('discarding');
     setTimeout(() => {
-      fetch('/api/items/delete', {
+      fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({id: pin.dataset.id})
+        body:JSON.stringify({id: pin.dataset.id, contextId: currentContextId})
       });
       if (activePin === pin) setActivePin(null);
       pin.remove();
@@ -331,8 +348,16 @@
       hide.addEventListener('click', ev => {
         ev.preventDefault();
         ev.stopPropagation();
-        if (pin.dataset.saved !== 'true') return;
+        if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
         hidePinImmediate(pin);
+      });
+    }
+    const enter = pin.querySelector('.pin-enter');
+    if (enter) {
+      enter.addEventListener('pointerdown', ev => ev.stopPropagation());
+      enter.addEventListener('click', ev => {
+        ev.preventDefault(); ev.stopPropagation();
+        if (mode === 'contexts') location.href = '/?ctx=' + encodeURIComponent(pin.dataset.id);
       });
     }
     if (del) {
@@ -450,7 +475,9 @@
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
-    pin.innerHTML = `<button class="pin-hide" aria-label="Hide card" title="Hide">–</button><button class="pin-delete" aria-label="Delete card" title="Delete">×</button><label class="pin-title"><input value="${(item.title||'').replace(/"/g,'&quot;')}" /></label><label class="pin-note"><textarea rows="2">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">↗</button>' : '';
+    const hideBtn = mode === 'focus' ? '<button class=\"pin-hide\" aria-label=\"Hide card\" title=\"Hide\">–</button>' : '';
+    pin.innerHTML = `${hideBtn}${enterBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
@@ -475,7 +502,8 @@
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor()}, true, false);
+    const np = createPin({id: uid(), title: mode==='contexts' ? 'New Context' : '', subNote: '', x, y, color: selectedPaletteColor()}, true, false);
+    if (mode==='contexts') savePin(np);
     e.preventDefault();
   });
 

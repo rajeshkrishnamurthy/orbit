@@ -1,6 +1,9 @@
 :root{--bg1:#1f2744;--bg2:#0c111f;--line:#3d4b82;--ink:#ecf1ff;--muted:#aeb7d9;--c1:#6E8CFF;--c2:#8D76FF;--c3:#55CEC0;--c4:#F7C773;--c5:#CB5A8A}
 *{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui;background:radial-gradient(circle at 50% -10%,var(--bg1) 0,var(--bg2) 55%);color:var(--ink)}
 .wrap{max-width:1300px;margin:16px auto;padding:0 14px} h1{margin:0 0 4px;font-size:22px}.sub{margin:0 0 10px;color:var(--muted)}
+.context-head{display:flex;align-items:center;gap:8px;margin:0 0 8px;color:#c6d2f7}
+.context-link{border:none;background:rgba(42,63,116,.65);color:#dce6ff;width:22px;height:22px;border-radius:999px;cursor:pointer}
+.context-name{font-size:12px;opacity:.95}
 .surface{position:relative;height:740px;border:1px solid #2c365f;border-radius:20px;background:radial-gradient(circle at center,#18203b 0,#12192f 45%,#0f1527 100%);overflow:hidden}
 .orbit{position:absolute;border:1px dashed var(--line);border-radius:999px;opacity:.35;pointer-events:none}.o1{inset:300px 500px}.o2{inset:220px 400px}.o3{inset:130px 280px}.o4{inset:40px 150px}
 .pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.26);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease;box-shadow:0 10px 20px rgba(8,12,24,.24),inset 0 1px 0 rgba(255,255,255,.16),inset 0 -1px 0 rgba(0,0,0,.12)}
@@ -16,8 +19,9 @@
 .pin-delete,.pin-hide{position:absolute;top:6px;width:18px;height:18px;border:none;border-radius:999px;background:rgba(0,0,0,.18);color:inherit;font-size:13px;line-height:18px;display:grid;place-items:center;opacity:0;pointer-events:none;cursor:pointer;transition:opacity .12s ease, background .12s ease}
 .pin-delete{right:6px}
 .pin-hide{right:28px;font-size:11px}
-.pin[data-saved="true"]:hover .pin-delete,.pin[data-saved="true"]:focus-within .pin-delete,.pin.selected[data-saved="true"] .pin-delete,.pin[data-saved="true"]:hover .pin-hide,.pin[data-saved="true"]:focus-within .pin-hide,.pin.selected[data-saved="true"] .pin-hide{opacity:.88;pointer-events:auto}
-.pin-delete:hover,.pin-hide:hover{background:rgba(0,0,0,.28)}
+.pin-enter{position:absolute;top:6px;right:50px;width:18px;height:18px;border:none;border-radius:999px;background:rgba(0,0,0,.18);color:inherit;font-size:11px;line-height:18px;display:grid;place-items:center;opacity:0;pointer-events:none;cursor:pointer;transition:opacity .12s ease, background .12s ease}
+.pin[data-saved="true"]:hover .pin-delete,.pin[data-saved="true"]:focus-within .pin-delete,.pin.selected[data-saved="true"] .pin-delete,.pin[data-saved="true"]:hover .pin-hide,.pin[data-saved="true"]:focus-within .pin-hide,.pin.selected[data-saved="true"] .pin-hide,.pin[data-saved="true"]:hover .pin-enter,.pin[data-saved="true"]:focus-within .pin-enter,.pin.selected[data-saved="true"] .pin-enter{opacity:.88;pointer-events:auto}
+.pin-delete:hover,.pin-hide:hover,.pin-enter:hover{background:rgba(0,0,0,.28)}
 .toolbar{position:absolute;right:12px;top:12px;display:flex;gap:8px;align-items:center;background:rgba(10,14,26,.58);border:1px solid #2e3b68;border-radius:10px;padding:8px 10px;backdrop-filter:blur(4px);z-index:20}
 .sw{width:18px;height:18px;border-radius:999px;border:2px solid rgba(255,255,255,.65);cursor:pointer}.sw.active{outline:2px solid #fff;outline-offset:1px}
 .hidden-toggle{border:none;background:rgba(42,63,116,.75);color:#dce6ff;padding:4px 8px;border-radius:8px;font-size:11px;cursor:pointer}
