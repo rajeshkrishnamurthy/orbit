@@ -20,11 +20,21 @@
   const openContextsEl = document.getElementById('open-contexts');
   if (mode === 'focus' && contextNameEl) {
     contextNameEl.contentEditable = 'true';
+    contextNameEl.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+    contextNameEl.addEventListener('click', () => {
+      contextNameEl.focus();
+      const r = document.createRange();
+      r.selectNodeContents(contextNameEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    });
     contextNameEl.addEventListener('blur', () => {
       fetch('/api/contexts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: currentContextId, title: contextNameEl.textContent || 'Main Orbit'})});
     });
   }
   if (openContextsEl) {
+    openContextsEl.addEventListener('pointerdown', (ev) => ev.stopPropagation());
     if (mode === 'focus') {
       openContextsEl.hidden = false;
       openContextsEl.onclick = () => { location.href = '/?canvas=contexts&ctx=' + encodeURIComponent(currentContextId); };
@@ -503,7 +513,7 @@
   items.forEach((item) => createPin(item, false, true));
 
   surface.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast')) return;
+    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head')) return;
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
