@@ -1,9 +1,13 @@
 (() => {
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
+  const boundaryEl = document.createElement('div');
+  boundaryEl.className = 'lens-boundary';
+  surface.appendChild(boundaryEl);
   const items = window.__ITEMS__ || [];
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
+  let lensRatio = 0.68;
   const lensExempt = new Set();
   let activePin = null;
   let undoState = null;
@@ -56,6 +60,20 @@
     lensWrap.appendChild(b);
   });
   toolbar.appendChild(lensWrap);
+
+  const sliderWrap = document.createElement('div');
+  sliderWrap.className = 'lens-slider-wrap';
+  sliderWrap.hidden = true;
+  sliderWrap.innerHTML = '<input class="lens-slider" type="range" min="35" max="85" value="68" step="1" aria-label="Lens sensitivity" />';
+  const lensSlider = sliderWrap.querySelector('.lens-slider');
+  lensSlider.addEventListener('input', () => {
+    lensRatio = Number(lensSlider.value) / 100;
+    updateBoundaryCue(true);
+    applyLens();
+  });
+  lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
+  lensSlider.addEventListener('pointerup', () => setTimeout(() => updateBoundaryCue(false), 380));
+  toolbar.appendChild(sliderWrap);
 
   const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
@@ -137,6 +155,9 @@
 
   function renderLensButtons(){
     document.querySelectorAll('.lens-btn').forEach(b => b.classList.toggle('active', b.dataset.lens === lens));
+    const sw = document.querySelector('.lens-slider-wrap');
+    if (sw) sw.hidden = (lens === 'all');
+    updateBoundaryCue(false);
   }
 
   function inLens(pin){
@@ -145,7 +166,7 @@
     const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
     const c = center();
     const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
-    const cutoff = maxR() * 0.68;
+    const cutoff = maxR() * lensRatio;
     if (lens === 'center') return d <= cutoff;
     return d > cutoff;
   }
@@ -156,6 +177,16 @@
       const visible = lens === 'all' || lensExempt.has(id) || inLens(pin);
       pin.style.display = visible ? '' : 'none';
     });
+  }
+
+  function updateBoundaryCue(forceShow){
+    if (!boundaryEl) return;
+    if (lens === 'all') { boundaryEl.classList.remove('show'); return; }
+    const r = maxR() * lensRatio;
+    boundaryEl.style.width = (r*2) + 'px';
+    boundaryEl.style.height = (r*2) + 'px';
+    if (forceShow) boundaryEl.classList.add('show');
+    else boundaryEl.classList.toggle('show', lens !== 'all');
   }
 
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -441,5 +472,5 @@
   renderLensButtons();
   applyLens();
 
-  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); });
+  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); });
 })();
