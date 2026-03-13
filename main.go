@@ -2,21 +2,29 @@ package main
 
 import (
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+//go:embed templates/*.html static/*
+var embeddedAssets embed.FS
 
 type Item struct {
 	ID        string    `json:"id"`
@@ -225,17 +233,22 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 	return n, err
 }
 
-
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil { return nil, err }
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { it.UpdatedAt = t }
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+			it.UpdatedAt = t
+		}
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -297,8 +310,6 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	return out, rows.Err()
 }
 
-
-
 func contextOrDefault(id string) string {
 	if id == "" {
 		return "main-orbit"
@@ -319,14 +330,20 @@ func (s *Store) ensureItemsContext() error {
 
 func (s *Store) contexts() ([]Context, error) {
 	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts ORDER BY updated_at DESC`)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	out := []Context{}
 	for rows.Next() {
 		var c Context
 		var updated string
-		if err := rows.Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated); err != nil { return nil, err }
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { c.UpdatedAt = t }
+		if err := rows.Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+			c.UpdatedAt = t
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -337,8 +354,12 @@ func (s *Store) contextByID(id string) (*Context, error) {
 	var c Context
 	var updated string
 	err := s.db.QueryRow(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts WHERE id=?`, id).Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated)
-	if err != nil { return nil, err }
-	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil { c.UpdatedAt = t }
+	if err != nil {
+		return nil, err
+	}
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		c.UpdatedAt = t
+	}
 	return &c, nil
 }
 
@@ -351,7 +372,9 @@ func (s *Store) upsertContext(c Context) error {
 }
 
 func (s *Store) deleteContext(id string) error {
-	if id == "main-orbit" { return errors.New("cannot delete Main Orbit") }
+	if id == "main-orbit" {
+		return errors.New("cannot delete Main Orbit")
+	}
 	_, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
 	return err
 }
@@ -373,15 +396,33 @@ func seedItems() []Item {
 }
 
 func main() {
-	tpl := template.Must(template.ParseFiles("templates/index.html"))
-	store, err := newStore("data/orbit.db")
+	tplFS, err := fs.Sub(embeddedAssets, "templates")
+	if err != nil {
+		log.Fatal(err)
+	}
+	tpl := template.Must(template.ParseFS(tplFS, "*.html"))
+
+	dataDir, err := orbitDataDir()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := migrateLegacyData(dataDir); err != nil {
+		log.Fatal(err)
+	}
+
+	store, err := newStore(filepath.Join(dataDir, "orbit.db"))
 	if err != nil {
 		log.Fatal(err)
 	}
 	app := &App{tpl: tpl, store: store}
 
+	staticFS, err := fs.Sub(embeddedAssets, "static")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
+	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", app.home)
 	mux.HandleFunc("/api/items", app.itemsAPI)
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
@@ -392,13 +433,13 @@ func main() {
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	listener, baseURL, err := listenOrbit()
+	if err != nil {
+		log.Fatal(err)
 	}
-	addr := ":" + port
-	fmt.Println("The Orbit running on http://localhost" + addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	fmt.Printf("The Orbit running on %s\n", baseURL)
+	go openBrowser(baseURL)
+	log.Fatal(http.Serve(listener, mux))
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -411,13 +452,19 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	ctxID := contextOrDefault(r.URL.Query().Get("ctx"))
 	if canvas == "contexts" {
 		contexts, err := a.store.contexts()
-		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		b, _ := json.Marshal(contexts)
 		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode})
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
-	if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	items, err := a.store.snapshot(ctxID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -478,13 +525,15 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"ok":true}`))
 }
 
-
 func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct { ID string `json:"id"`; ContextID string `json:"contextId"` }
+	var in struct {
+		ID        string `json:"id"`
+		ContextID string `json:"contextId"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -507,7 +556,9 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct { ContextID string `json:"contextId"` }
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	items, err := a.store.revealAllHidden(in.ContextID)
 	if err != nil {
@@ -519,60 +570,108 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-
-
-
 func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
-	var in struct { ContextID string `json:"contextId"` }
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	items, err := a.store.hiddenItems(in.ContextID)
-	if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	b, _ := json.Marshal(map[string]any{"ok": true, "items": items})
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
 
 func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
-	var in struct {
-		ID string `json:"id"`
-		ContextID string `json:"contextId"`
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
-	if in.ID == "" { http.Error(w, "id required", http.StatusBadRequest); return }
-	if err := a.store.unhideAt(in.ID, in.ContextID, in.X, in.Y); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	var in struct {
+		ID        string  `json:"id"`
+		ContextID string  `json:"contextId"`
+		X         float64 `json:"x"`
+		Y         float64 `json:"y"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.unhideAt(in.ID, in.ContextID, in.X, in.Y); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	hiddenN, _ := a.store.hiddenCount(in.ContextID)
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
 }
 
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	var c Context
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
-	if c.ID == "" { c.ID = fmt.Sprintf("c_%d", time.Now().UnixNano()) }
-	if c.Title == "" { c.Title = "Untitled context" }
-	if c.Color == "" { c.Color = "var(--c1)" }
-	if err := a.store.upsertContext(c); err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if c.ID == "" {
+		c.ID = fmt.Sprintf("c_%d", time.Now().UnixNano())
+	}
+	if c.Title == "" {
+		c.Title = "Untitled context"
+	}
+	if c.Color == "" {
+		c.Color = "var(--c1)"
+	}
+	if err := a.store.upsertContext(c); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`))
 }
 
 func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
-	var in struct { ID string `json:"id"` }
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
-	if in.ID == "" { http.Error(w, "id required", http.StatusBadRequest); return }
-	if err := a.store.deleteContext(in.ID); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	if err := a.store.deleteContext(in.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
 }
 
 func isMobileRequest(r *http.Request) bool {
-	if r.URL.Query().Get("mobile") == "1" { return true }
+	if r.URL.Query().Get("mobile") == "1" {
+		return true
+	}
 	ua := strings.ToLower(r.Header.Get("User-Agent"))
 	return strings.Contains(ua, "iphone") || strings.Contains(ua, "android") || strings.Contains(ua, "mobile")
 }
@@ -590,7 +689,9 @@ func classifyDesktopBand(x, y float64) bool {
 }
 
 func boolToInt(b bool) int {
-	if b { return 1 }
+	if b {
+		return 1
+	}
 	return 0
 }
 
@@ -613,4 +714,117 @@ func backupDB(path string) error {
 	defer dst.Close()
 	_, err = io.Copy(dst, src)
 	return err
+}
+
+func orbitDataDir() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("ORBIT_DATA_DIR")); override != "" {
+		if err := os.MkdirAll(override, 0o755); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(base, "Orbit")
+	if runtime.GOOS == "darwin" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr == nil {
+			dir = filepath.Join(home, "Library", "Application Support", "Orbit")
+		}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func migrateLegacyData(dataDir string) error {
+	legacyDir := filepath.Join("data")
+	if !fileExists(legacyDir) || legacyDir == dataDir {
+		return nil
+	}
+	if fileExists(filepath.Join(dataDir, "orbit.db")) || fileExists(filepath.Join(dataDir, ".orbit_initialized")) {
+		return nil
+	}
+	entries := []string{"orbit.db", "orbit.db.bak", ".orbit_initialized", "items.legacy.json"}
+	copiedAny := false
+	for _, name := range entries {
+		src := filepath.Join(legacyDir, name)
+		if !fileExists(src) {
+			continue
+		}
+		if err := copyFile(src, filepath.Join(dataDir, name)); err != nil {
+			return err
+		}
+		copiedAny = true
+	}
+	if copiedAny {
+		log.Printf("migrated legacy runtime data from %s to %s", legacyDir, dataDir)
+	}
+	return nil
+}
+
+func copyFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return err
+	}
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return dst.Close()
+}
+
+func listenOrbit() (net.Listener, string, error) {
+	preferred := strings.TrimSpace(os.Getenv("PORT"))
+	if preferred == "" {
+		preferred = "8080"
+	}
+	ports := []string{preferred}
+	if preferred == "8080" {
+		ports = append(ports, "8081", "8082", "8083", "8084", "8085")
+	}
+	for _, port := range ports {
+		ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+		if err == nil {
+			return ln, "http://127.0.0.1:" + port, nil
+		}
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, "", err
+	}
+	addr := ln.Addr().String()
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		ln.Close()
+		return nil, "", err
+	}
+	return ln, "http://127.0.0.1:" + port, nil
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("open browser: %v", err)
+	}
 }
