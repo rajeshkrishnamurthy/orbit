@@ -40,6 +40,7 @@
     });
     hiddenCount = data.hiddenCount || 0;
     renderHiddenButton();
+    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
     applyLens();
   };
   toolbar.appendChild(hiddenBtn);
@@ -55,6 +56,7 @@
       lens = name;
       lensExempt.clear(); // explicit lens re-application
       renderLensButtons();
+      surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
       applyLens();
     };
     lensWrap.appendChild(b);
@@ -69,6 +71,7 @@
   lensSlider.addEventListener('input', () => {
     lensRatio = Number(lensSlider.value) / 100;
     updateBoundaryCue(true);
+    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
     applyLens();
   });
   lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
