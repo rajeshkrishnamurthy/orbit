@@ -378,8 +378,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		contexts, err := a.store.contexts()
 		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		b, _ := json.Marshal(contexts)
-		cur, _ := a.store.contextByID(ctxID)
-		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": safeContextTitle(cur), "PageTitle": "Your Contexts", "HeadingSize": "24px"})
+		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts"})
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
@@ -395,7 +394,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "PageTitle": "The Orbit", "HeadingSize": "22px"})
+	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title})
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -507,11 +506,6 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.deleteContext(in.ID); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
-}
-
-func safeContextTitle(c *Context) string {
-	if c == nil || c.Title == "" { return "Main Orbit" }
-	return c.Title
 }
 
 func fileExists(path string) bool {
