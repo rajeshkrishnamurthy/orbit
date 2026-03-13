@@ -46,7 +46,7 @@
 .pin.slipping{border-color:rgba(255,164,136,.62);box-shadow:0 12px 24px rgba(8,12,24,.30),0 0 0 1px rgba(255,164,136,.22),inset 0 1px 0 rgba(255,255,255,.20),inset 0 -1px 0 rgba(0,0,0,.14)}
 .pin.slipping .pin-slip{background:#d45a48;color:#fff;opacity:1;box-shadow:0 0 0 1px rgba(255,255,255,.18) inset}
 
-.hidden-tray{position:absolute;right:12px;bottom:54px;z-index:31;width:240px;max-height:220px;overflow:auto;background:rgba(12,17,31,.86);border:1px solid rgba(46,59,104,.72);border-radius:12px;padding:8px;display:grid;gap:6px}
+.hidden-tray{position:absolute;z-index:31;width:240px;max-height:220px;overflow:auto;background:rgba(12,17,31,.86);border:1px solid rgba(46,59,104,.72);border-radius:12px;padding:8px;display:grid;gap:6px;transform-origin:top right;box-shadow:0 10px 24px rgba(0,0,0,.28)}
 .hidden-tray[hidden]{display:none}
 .hidden-tray-item{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#dfe7ff;border-radius:10px;padding:7px 8px;font-size:12px;cursor:grab;user-select:none}
 .hidden-tray-item:active{cursor:grabbing}

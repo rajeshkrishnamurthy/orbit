@@ -76,6 +76,16 @@
   hiddenTray.hidden = true;
   surface.appendChild(hiddenTray);
 
+  function placeHiddenTray(){
+    const btnRect = hiddenBtn.getBoundingClientRect();
+    const surfRect = surface.getBoundingClientRect();
+    const trayW = 240;
+    const left = Math.max(8, Math.min(surface.clientWidth - trayW - 8, (btnRect.right - surfRect.left) - trayW));
+    const top = Math.max(8, Math.min(surface.clientHeight - 230, (btnRect.bottom - surfRect.top) + 8));
+    hiddenTray.style.left = left + 'px';
+    hiddenTray.style.top = top + 'px';
+  }
+
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
   ['all','center','periphery'].forEach(name => {
@@ -202,6 +212,7 @@
 
   async function openHiddenTray(){
     hiddenTray.hidden = false;
+    placeHiddenTray();
     hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
     try {
       const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
@@ -607,5 +618,5 @@
   renderLensButtons();
   applyLens();
 
-  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); });
+  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); if (trayOpen) placeHiddenTray(); });
 })();
