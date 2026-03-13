@@ -21,8 +21,9 @@
 .pin-delete{right:6px}
 .pin-hide{right:28px;font-size:11px}
 .pin-enter{position:absolute;right:8px;bottom:8px;width:20px;height:20px;border:none;border-radius:999px;background:rgba(0,0,0,.2);color:inherit;font-size:12px;line-height:20px;display:grid;place-items:center;opacity:0;pointer-events:none;cursor:pointer;transition:opacity .12s ease, background .12s ease}
+.pin-slip{position:absolute;right:8px;bottom:8px;min-width:18px;height:18px;padding:0 6px;border:none;border-radius:999px;background:rgba(22,26,36,.32);color:rgba(236,241,255,.68);font-size:11px;font-weight:700;line-height:18px;display:grid;place-items:center;opacity:.72;pointer-events:auto;cursor:pointer;transition:opacity .12s ease, background .12s ease, color .12s ease, box-shadow .12s ease}
 .pin[data-saved="true"]:hover .pin-delete,.pin[data-saved="true"]:focus-within .pin-delete,.pin.selected[data-saved="true"] .pin-delete,.pin[data-saved="true"]:hover .pin-hide,.pin[data-saved="true"]:focus-within .pin-hide,.pin.selected[data-saved="true"] .pin-hide,.pin[data-saved="true"]:hover .pin-enter,.pin[data-saved="true"]:focus-within .pin-enter,.pin.selected[data-saved="true"] .pin-enter{opacity:.88;pointer-events:auto}
-.pin-delete:hover,.pin-hide:hover,.pin-enter:hover{background:rgba(0,0,0,.28)}
+.pin-delete:hover,.pin-hide:hover,.pin-enter:hover,.pin-slip:hover{background:rgba(0,0,0,.28)}
 .toolbar{position:absolute;right:12px;top:12px;display:flex;gap:8px;align-items:center;background:rgba(10,14,26,.58);border:1px solid #2e3b68;border-radius:10px;padding:8px 10px;backdrop-filter:blur(4px);z-index:20}
 .sw{width:18px;height:18px;border-radius:999px;border:2px solid rgba(255,255,255,.65);cursor:pointer}.sw.active{outline:2px solid #fff;outline-offset:1px}
 .hidden-toggle{border:none;background:rgba(42,63,116,.75);color:#dce6ff;padding:4px 8px;border-radius:8px;font-size:11px;cursor:pointer}
@@ -41,3 +42,6 @@
 .lens-slider::-moz-range-thumb{width:10px;height:10px;border-radius:50%;background:#cdd8ff;border:1px solid rgba(0,0,0,.2)}
 .lens-boundary{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:1px dashed rgba(205,216,255,.45);border-radius:999px;pointer-events:none;opacity:0;transition:opacity .12s ease;z-index:3}
 .lens-boundary.show{opacity:1}
+
+.pin.slipping{border-color:rgba(255,164,136,.62);box-shadow:0 12px 24px rgba(8,12,24,.30),0 0 0 1px rgba(255,164,136,.22),inset 0 1px 0 rgba(255,255,255,.20),inset 0 -1px 0 rgba(0,0,0,.14)}
+.pin.slipping .pin-slip{background:#d45a48;color:#fff;opacity:1;box-shadow:0 0 0 1px rgba(255,255,255,.18) inset}

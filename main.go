@@ -26,6 +26,7 @@ type Item struct {
 	Y         float64   `json:"y"`
 	Color     string    `json:"color"`
 	Hidden    bool      `json:"hidden,omitempty"`
+	Slipping  bool      `json:"slipping,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS items (
   y REAL NOT NULL,
   color TEXT NOT NULL,
   hidden INTEGER NOT NULL DEFAULT 0,
+  slipping INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
@@ -135,6 +137,10 @@ CREATE TABLE IF NOT EXISTS items (
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return err
 	}
@@ -187,16 +193,17 @@ func (s *Store) update(item Item) error {
 	createdAt := now.Format(time.RFC3339Nano)
 	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
 	_, err := s.db.Exec(`
-INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?)
+INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   sub_note=excluded.sub_note,
   x=excluded.x,
   y=excluded.y,
   color=excluded.color,
+  slipping=excluded.slipping,
   updated_at=excluded.updated_at;
-`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, createdAt, now.Format(time.RFC3339Nano))
+`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), createdAt, now.Format(time.RFC3339Nano))
 	return err
 }
 
@@ -217,7 +224,7 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +233,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -245,7 +252,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 }
 
 func (s *Store) snapshot(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,updated_at FROM items WHERE hidden=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +261,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -506,6 +513,11 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.deleteContext(in.ID); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
+}
+
+func boolToInt(b bool) int {
+	if b { return 1 }
+	return 0
 }
 
 func fileExists(path string) bool {

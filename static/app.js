@@ -135,6 +135,11 @@
     refreshSwatches();
   }
 
+  function setSlipping(pin, on){
+    pin.dataset.slipping = on ? "true" : "false";
+    pin.classList.toggle("slipping", on);
+  }
+
   function setPinColor(pin, color){
     pin.style.background = color;
     pin.dataset.color = color;
@@ -255,7 +260,8 @@
       subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
-      color: pin.dataset.color || 'var(--c1)'
+      color: pin.dataset.color || 'var(--c1)',
+      slipping: pin.dataset.slipping === 'true'
     };
     clearTimeout(pending.get(id));
     pending.set(id, setTimeout(() => {
@@ -292,7 +298,8 @@
       subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
-      color: pin.dataset.color || 'var(--c1)'
+      color: pin.dataset.color || 'var(--c1)',
+      slipping: pin.dataset.slipping === 'true'
     };
 
     fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
@@ -357,6 +364,17 @@
   function bindPin(pin){
     const del = pin.querySelector('.pin-delete');
     const hide = pin.querySelector('.pin-hide');
+    const slip = pin.querySelector('.pin-slip');
+    if (slip) {
+      slip.addEventListener('pointerdown', ev => ev.stopPropagation());
+      slip.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const on = pin.dataset.slipping !== 'true';
+        setSlipping(pin, on);
+        savePin(pin);
+      });
+    }
     if (hide) {
       hide.addEventListener('pointerdown', ev => ev.stopPropagation());
       hide.addEventListener('click', ev => {
@@ -492,11 +510,13 @@
     pin.style.top = `${item.y}px`;
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
     const hideBtn = mode === 'focus' ? '<button class=\"pin-hide\" aria-label=\"Hide card\" title=\"Hide\">–</button>' : '';
-    pin.innerHTML = `${hideBtn}${enterBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
+    pin.innerHTML = `${hideBtn}${enterBtn}${slipBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
     setPinColor(pin, item.color || 'var(--c1)');
+    setSlipping(pin, !!item.slipping);
     applyDistanceStyle(pin);
     bindPin(pin);
     pin.style.display = (!markSaved || lensExempt.has(item.id) || inLens(pin)) ? '' : 'none';
@@ -517,7 +537,7 @@
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    const np = createPin({id: uid(), title: mode==='contexts' ? 'New Context' : '', subNote: '', x, y, color: selectedPaletteColor()}, true, false);
+    const np = createPin({id: uid(), title: mode==='contexts' ? 'New Context' : '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
     if (mode==='contexts') savePin(np);
     e.preventDefault();
   });
