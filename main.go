@@ -402,13 +402,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	mobileMode := isMobileRequest(r)
 	canvas := r.URL.Query().Get("canvas")
 	ctxID := contextOrDefault(r.URL.Query().Get("ctx"))
 	if canvas == "contexts" {
 		contexts, err := a.store.contexts()
 		if err != nil { http.Error(w, err.Error(), http.StatusInternalServerError); return }
 		b, _ := json.Marshal(contexts)
-		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts"})
+		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode})
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
@@ -424,7 +425,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title})
+	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode})
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -564,6 +565,12 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 	if err := a.store.deleteContext(in.ID); err != nil { http.Error(w, err.Error(), http.StatusBadRequest); return }
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
+}
+
+func isMobileRequest(r *http.Request) bool {
+	if r.URL.Query().Get("mobile") == "1" { return true }
+	ua := strings.ToLower(r.Header.Get("User-Agent"))
+	return strings.Contains(ua, "iphone") || strings.Contains(ua, "android") || strings.Contains(ua, "mobile")
 }
 
 func boolToInt(b bool) int {

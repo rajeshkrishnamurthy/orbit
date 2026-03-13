@@ -52,3 +52,9 @@
 .hidden-tray-item:active{cursor:grabbing}
 
 .hidden-tray-empty{font-size:12px;color:#aeb7d9;padding:6px 4px}
+
+.mobile-lens-tabs{display:flex;gap:6px}.mobile-lens-tab{border:none;background:rgba(255,255,255,.08);color:#cdd8ff;padding:5px 10px;border-radius:9px;font-size:12px;cursor:pointer}.mobile-lens-tab.active{background:#4b5f9f;color:#fff}
+.mobile-core-void{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:150px;height:150px;border:1px dashed rgba(171,184,235,.20);border-radius:999px;background:radial-gradient(circle,rgba(24,34,63,.45),rgba(24,34,63,.08));pointer-events:none;z-index:2}
+.mobile-pin{position:absolute;min-width:124px;max-width:156px;padding:8px;border-radius:11px;border:1px solid rgba(255,255,255,.18);background:rgba(96,112,182,.9);font-size:11px;box-shadow:0 8px 18px rgba(0,0,0,.24);z-index:4}
+.mobile-pin b{display:block;font-size:12px}.mobile-pin p{margin:3px 0 0;color:#e8edff;font-size:11px}
+.mobile-pin.periphery{background:rgba(106,122,178,.88)}

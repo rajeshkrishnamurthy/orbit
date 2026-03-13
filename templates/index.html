@@ -26,6 +26,11 @@
     window.__MODE__ = "{{.Mode}}";
     window.__CURRENT_CONTEXT_ID__ = "{{.CurrentContextID}}";
     window.__CURRENT_CONTEXT_TITLE__ = "{{.CurrentContextTitle}}";
+    window.__MOBILE_MODE__ = {{if .MobileMode}}true{{else}}false{{end}};
   </script>
+  {{if .MobileMode}}
+  <script src="/static/app-mobile.js"></script>
+  {{else}}
   <script src="/static/app.js"></script>
+  {{end}}
 </body></html>
