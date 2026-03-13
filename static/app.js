@@ -349,6 +349,11 @@
       slipping: pin.dataset.slipping === 'true'
     };
 
+    if (mode === 'contexts') {
+      const ok = window.confirm('Delete context?\n\nThis will also delete all items inside this context.');
+      if (!ok) return;
+    }
+
     fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
