@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ type Item struct {
 	Color     string    `json:"color"`
 	Hidden    bool      `json:"hidden,omitempty"`
 	Slipping  bool      `json:"slipping,omitempty"`
+	InCenter  bool      `json:"inCenter,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
@@ -260,6 +262,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
+		it.InCenter = classifyDesktopBand(it.X, it.Y)
 		out = append(out, it)
 	}
 	if err := rows.Err(); err != nil {
@@ -288,6 +291,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
+		it.InCenter = classifyDesktopBand(it.X, it.Y)
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -571,6 +575,18 @@ func isMobileRequest(r *http.Request) bool {
 	if r.URL.Query().Get("mobile") == "1" { return true }
 	ua := strings.ToLower(r.Header.Get("User-Agent"))
 	return strings.Contains(ua, "iphone") || strings.Contains(ua, "android") || strings.Contains(ua, "mobile")
+}
+
+func classifyDesktopBand(x, y float64) bool {
+	// Desktop source-of-truth classification (matches Orbit desktop geometry baseline)
+	const desktopW = 1272.0
+	const desktopH = 740.0
+	const lensRatio = 0.68
+	cx, cy := desktopW/2, desktopH/2
+	maxR := min(desktopW, desktopH) * 0.42
+	dx, dy := x-cx, y-cy
+	d := math.Hypot(dx, dy)
+	return d <= (maxR * lensRatio)
 }
 
 func boolToInt(b bool) int {

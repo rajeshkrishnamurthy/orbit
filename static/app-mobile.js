@@ -26,38 +26,34 @@
   surface.appendChild(coreVoid);
 
   let lens = 'center';
-  const lensRatio = 0.68;
 
-  function center(){ return {x: surface.clientWidth/2, y: surface.clientHeight/2}; }
-  function maxR(){ return Math.min(surface.clientWidth, surface.clientHeight) * 0.42; }
-  function isCenter(item){
-    const c = center();
-    const d = Math.hypot((item.x||0)-c.x, (item.y||0)-c.y);
-    return d <= maxR() * lensRatio;
+  const DESKTOP_CX = 1272/2;
+  const DESKTOP_CY = 740/2;
+
+  function desktopPolar(item){
+    const dx = (item.x || DESKTOP_CX) - DESKTOP_CX;
+    const dy = (item.y || DESKTOP_CY) - DESKTOP_CY;
+    return { angle: Math.atan2(dy, dx), dist: Math.hypot(dx, dy) };
   }
 
   function render(){
     surface.querySelectorAll('.mobile-pin').forEach(n => n.remove());
-    const c = center();
+    const c = {x: surface.clientWidth/2, y: surface.clientHeight/2};
     const field = Math.min(surface.clientWidth, surface.clientHeight);
-    const filtered = items.filter(it => lens === 'center' ? isCenter(it) : !isCenter(it));
+    const filtered = items.filter(it => lens === 'center' ? !!it.inCenter : !it.inCenter);
 
     filtered.forEach((it) => {
-      const dx = (it.x||c.x)-c.x;
-      const dy = (it.y||c.y)-c.y;
-      const ang = Math.atan2(dy, dx);
-      const dist = Math.hypot(dx, dy);
-      const cut = maxR() * lensRatio;
+      const { angle: ang, dist } = desktopPolar(it);
+      const desktopMax = Math.hypot(DESKTOP_CX, DESKTOP_CY);
+      const normDist = Math.min(1, dist / Math.max(1, desktopMax));
       let nx, ny;
 
       if (lens === 'center') {
-        const norm = Math.min(1, dist / Math.max(1, cut));
-        const r = field * (0.12 + 0.22 * norm);
+        const r = field * (0.12 + 0.22 * normDist);
         nx = c.x + Math.cos(ang) * r;
         ny = c.y + Math.sin(ang) * r;
       } else {
-        const norm = Math.min(1, (dist - cut) / Math.max(1, maxR() - cut));
-        const r = field * (0.60 + 0.28 * Math.max(0, norm));
+        const r = field * (0.58 + 0.30 * normDist);
         nx = c.x + Math.cos(ang) * r;
         ny = c.y + Math.sin(ang) * r;
       }
