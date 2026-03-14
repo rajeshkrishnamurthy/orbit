@@ -1,0 +1,14 @@
+{
+  "name": "orbit-ui-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright UI tests for Orbit",
+  "scripts": {
+    "test:ui": "playwright test",
+    "test:ui:headed": "playwright test --headed",
+    "test:ui:debug": "playwright test --debug"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0"
+  }
+}
