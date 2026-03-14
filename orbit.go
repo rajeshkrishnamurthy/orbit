@@ -1,4 +1,4 @@
-package main
+package orbit
 
 import (
 	"database/sql"
@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -78,6 +79,18 @@ func newStore(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`PRAGMA synchronous = FULL`); err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return nil, err
+	}
 
 	s := &Store{db: db}
 	if err := s.ensureSchema(); err != nil {
@@ -98,6 +111,9 @@ func newStore(dbPath string) (*Store, error) {
 
 	if count == 0 {
 		if !hadDB && !fileExists(initializedFlag) {
+			if err := s.ensureInitialContexts(); err != nil {
+				return nil, err
+			}
 			if err := s.seedDefaults(); err != nil {
 				return nil, err
 			}
@@ -319,8 +335,17 @@ func contextOrDefault(id string) string {
 
 func (s *Store) ensureDefaultContext() error {
 	now := time.Now().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "main-orbit", "Main Orbit", "", 760.0, 320.0, "var(--c1)", now, now)
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "main-orbit", "Main Orbit", "", 560.0, 320.0, "var(--c1)", now, now)
 	return err
+}
+
+func (s *Store) ensureInitialContexts() error {
+	now := time.Now().Format(time.RFC3339Nano)
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "more-contexts", "Add more contexts", "Each context has its own canvas. Unleash!", 560.0, 500.0, "var(--c2)", now, now)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) ensureItemsContext() error {
@@ -387,38 +412,40 @@ type App struct {
 func seedItems() []Item {
 	now := time.Now()
 	return []Item{
-		{ID: "i1", Title: "Equitas upgrade", SubNote: "Capital decision window", X: 760, Y: 280, Color: "var(--c1)", UpdatedAt: now},
-		{ID: "i2", Title: "DBS rate negotiation", SubNote: "Call when treasury opens", X: 620, Y: 380, Color: "var(--c2)", UpdatedAt: now},
-		{ID: "i3", Title: "Credit line reset", SubNote: "After DBS close", X: 880, Y: 430, Color: "var(--c3)", UpdatedAt: now},
-		{ID: "i4", Title: "Insurance reshuffle", SubNote: "Risk optimization", X: 480, Y: 280, Color: "var(--c4)", UpdatedAt: now},
-		{ID: "i5", Title: "Family trust structure", SubNote: "Long-horizon architecture", X: 360, Y: 460, Color: "var(--c5)", UpdatedAt: now},
+		{ID: "i1", Title: "A peripheral priority", SubNote: "Important, but not as much as core", X: 760, Y: 280, Color: "var(--c1)", UpdatedAt: now},
+		{ID: "i2", Title: "Position signals focus", SubNote: "Move closer to center for higher attention", X: 620, Y: 380, Color: "var(--c2)", UpdatedAt: now},
+		{ID: "i3", Title: "Two lenses", SubNote: "Try Center and Periphery next to the colour bar", X: 880, Y: 430, Color: "var(--c3)", UpdatedAt: now},
+		{ID: "i4", Title: "Add entire contexts", SubNote: "Try clicking the small icon next to Main Orbit :)", X: 980, Y: 560, Color: "var(--c4)", UpdatedAt: now},
+		{ID: "i5", Title: "Drag and move", SubNote: "Move cards in canvas to reflect their current attention level", X: 360, Y: 460, Color: "var(--c5)", UpdatedAt: now},
+		{ID: "i6", Title: "Click anywhere to add", SubNote: "Use controls on card to delete, hide or mark for attention", X: 150, Y: 350, Color: "var(--c2)", UpdatedAt: now},
+		{ID: "i7", Title: "There's more hidden", SubNote: "Tap around, its fairly intuitive. You will figure it out.", X: 1020, Y: 360, Color: "var(--c3)", UpdatedAt: now},
 	}
 }
 
-func main() {
+func newMux() (*http.ServeMux, error) {
 	tplFS, err := fs.Sub(embeddedAssets, "templates")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	tpl := template.Must(template.ParseFS(tplFS, "*.html"))
 
 	dataDir, err := orbitDataDir()
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	if err := migrateLegacyData(dataDir); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	store, err := newStore(filepath.Join(dataDir, "orbit.db"))
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	app := &App{tpl: tpl, store: store}
 
 	staticFS, err := fs.Sub(embeddedAssets, "static")
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
 	mux := http.NewServeMux()
@@ -432,14 +459,28 @@ func main() {
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
+	return mux, nil
+}
+
+func NewHandler() (http.Handler, error) {
+	return newMux()
+}
+
+func RunWeb(autoOpenBrowser bool) error {
+	mux, err := newMux()
+	if err != nil {
+		return err
+	}
 
 	listener, baseURL, err := listenOrbit()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	fmt.Printf("The Orbit running on %s\n", baseURL)
-	go openBrowser(baseURL)
-	log.Fatal(http.Serve(listener, mux))
+	if autoOpenBrowser {
+		go openBrowser(baseURL)
+	}
+	return http.Serve(listener, mux)
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -622,16 +663,58 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var c Context
-	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+	var in struct {
+		ID      string   `json:"id"`
+		Title   *string  `json:"title"`
+		SubNote *string  `json:"subNote"`
+		X       *float64 `json:"x"`
+		Y       *float64 `json:"y"`
+		Color   *string  `json:"color"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if c.ID == "" {
-		c.ID = fmt.Sprintf("c_%d", time.Now().UnixNano())
+
+	id := strings.TrimSpace(in.ID)
+	if id == "" {
+		id = fmt.Sprintf("c_%d", time.Now().UnixNano())
+	}
+
+	c := Context{
+		ID:      id,
+		Title:   "Untitled context",
+		SubNote: "",
+		X:       560.0,
+		Y:       320.0,
+		Color:   "var(--c1)",
+	}
+
+	existing, err := a.store.contextByID(id)
+	if err == nil {
+		c = *existing
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if in.Title != nil {
+		c.Title = strings.TrimSpace(*in.Title)
 	}
 	if c.Title == "" {
 		c.Title = "Untitled context"
+	}
+	if in.SubNote != nil {
+		c.SubNote = *in.SubNote
+	}
+	if in.X != nil {
+		c.X = *in.X
+	}
+	if in.Y != nil {
+		c.Y = *in.Y
+	}
+	if in.Color != nil {
+		c.Color = strings.TrimSpace(*in.Color)
 	}
 	if c.Color == "" {
 		c.Color = "var(--c1)"
@@ -641,26 +724,32 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`))
+	w.Write([]byte(`{"ok":true,"id":"` + id + `"}`))
 }
 
 func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	var id string
+	switch r.Method {
+	case http.MethodPost:
+		var in struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		id = in.ID
+	case http.MethodGet:
+		id = strings.TrimSpace(r.URL.Query().Get("id"))
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct {
-		ID string `json:"id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if in.ID == "" {
+	if id == "" {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
 	}
-	if err := a.store.deleteContext(in.ID); err != nil {
+	if err := a.store.deleteContext(id); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -701,19 +790,42 @@ func fileExists(path string) bool {
 }
 
 func backupDB(path string) error {
-	src, err := os.Open(path)
+	backupDir := filepath.Join(filepath.Dir(path), "backups")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return err
+	}
+	base := filepath.Base(path)
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	versionedBackup := filepath.Join(backupDir, fmt.Sprintf("%s.%s.bak", base, timestamp))
+	if err := copyFile(path, versionedBackup); err != nil {
+		return err
+	}
+	// Keep a stable "latest" backup pointer.
+	latestBackup := filepath.Join(backupDir, base+".bak")
+	if err := copyFile(path, latestBackup); err != nil {
+		return err
+	}
+	return pruneBackups(filepath.Join(backupDir, base), 10)
+}
+
+func pruneBackups(path string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	entries, err := filepath.Glob(path + ".*.bak")
 	if err != nil {
 		return err
 	}
-	defer src.Close()
-	backupPath := path + ".bak"
-	dst, err := os.Create(backupPath)
-	if err != nil {
-		return err
+	if len(entries) <= keep {
+		return nil
 	}
-	defer dst.Close()
-	_, err = io.Copy(dst, src)
-	return err
+	sort.Strings(entries)
+	for _, stale := range entries[:len(entries)-keep] {
+		if rmErr := os.Remove(stale); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			return rmErr
+		}
+	}
+	return nil
 }
 
 func orbitDataDir() (string, error) {

@@ -1,41 +1,4 @@
 (() => {
-  const splashEl = document.getElementById('desktop-splash');
-  const splashLineEl = document.getElementById('desktop-splash-line');
-  const splashLines = [
-    'Your active priorities in one beautiful canvas',
-    "For people who can't deal with task lists",
-    'Operational control, with calm'
-  ];
-  const SPLASH_INITIAL_HOLD_MS = 1200;
-  const SPLASH_LINE_HOLD_MS = 2400;
-  const SPLASH_TRANSITION_MS = 360;
-  const SPLASH_DISMISS_MS = SPLASH_INITIAL_HOLD_MS + SPLASH_LINE_HOLD_MS + SPLASH_TRANSITION_MS + SPLASH_LINE_HOLD_MS;
-  let splashIndex = 0;
-  let splashTimer = null;
-
-  function rotateSplashLine(){
-    if (!splashEl || !splashLineEl || splashEl.classList.contains('is-hidden')) return;
-    splashLineEl.classList.remove('is-visible');
-    window.setTimeout(() => {
-      splashIndex = (splashIndex + 1) % splashLines.length;
-      splashLineEl.textContent = splashLines[splashIndex];
-      splashLineEl.classList.add('is-visible');
-    }, SPLASH_TRANSITION_MS);
-    splashTimer = window.setTimeout(rotateSplashLine, SPLASH_LINE_HOLD_MS + SPLASH_TRANSITION_MS);
-  }
-
-  function dismissSplash(){
-    if (!splashEl || splashEl.classList.contains('is-hidden')) return;
-    splashEl.classList.add('is-hidden');
-    if (splashTimer) window.clearTimeout(splashTimer);
-  }
-
-  if (splashEl && splashLineEl) {
-    splashLineEl.textContent = splashLines[0];
-    splashLineEl.classList.add('is-visible');
-    splashTimer = window.setTimeout(rotateSplashLine, SPLASH_INITIAL_HOLD_MS + SPLASH_LINE_HOLD_MS);
-  }
-
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
   const boundaryEl = document.createElement('div');
@@ -54,7 +17,7 @@
   let hiddenItemsCache = [];
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
-  toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Item color</span>';
+  toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Card color</span>';
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
   if (mode === 'focus' && contextNameEl) {
@@ -112,6 +75,39 @@
   hiddenTray.className = 'hidden-tray';
   hiddenTray.hidden = true;
   surface.appendChild(hiddenTray);
+
+  const contextConfirm = document.createElement('div');
+  contextConfirm.className = 'context-confirm';
+  contextConfirm.hidden = true;
+  contextConfirm.innerHTML = '<div class="context-confirm__panel"><div class="context-confirm__title">Delete context?</div><div class="context-confirm__body" id="context-confirm-body">This will also delete all items inside this context.</div><div class="context-confirm__actions"><button type="button" class="context-confirm__btn context-confirm__btn--ghost" id="context-confirm-cancel">Cancel</button><button type="button" class="context-confirm__btn context-confirm__btn--danger" id="context-confirm-delete">Delete</button></div></div>';
+  surface.appendChild(contextConfirm);
+  const contextConfirmBodyEl = contextConfirm.querySelector('#context-confirm-body');
+  const contextConfirmCancelEl = contextConfirm.querySelector('#context-confirm-cancel');
+  const contextConfirmDeleteEl = contextConfirm.querySelector('#context-confirm-delete');
+
+  function confirmContextDelete(name){
+    return new Promise((resolve) => {
+      const close = (ok) => {
+        contextConfirm.hidden = true;
+        contextConfirmCancelEl.onclick = null;
+        contextConfirmDeleteEl.onclick = null;
+        resolve(ok);
+      };
+      const label = (name && String(name).trim()) ? `"${String(name).trim()}"` : 'this context';
+      contextConfirmBodyEl.textContent = `Delete ${label}? This will also delete all items inside this context.`;
+      contextConfirm.hidden = false;
+      contextConfirmCancelEl.onclick = () => close(false);
+      contextConfirmDeleteEl.onclick = () => close(true);
+    });
+  }
+
+  function showCanvasWarning(message){
+    const el = document.createElement('div');
+    el.className = 'canvas-warning';
+    el.textContent = message || 'Unable to complete action.';
+    surface.appendChild(el);
+    setTimeout(() => { el.remove(); }, 2800);
+  }
 
   function placeHiddenTray(){
     const btnRect = hiddenBtn.getBoundingClientRect();
@@ -196,15 +192,18 @@
     const titleEl = pin.querySelector('.pin-title input');
     const noteEl = pin.querySelector('.pin-note textarea');
     const delEl = pin.querySelector('.pin-delete');
+    const hideEl = pin.querySelector('.pin-hide');
+    const enterEl = pin.querySelector('.pin-enter');
     if (luminance > 0.62){
       titleEl.style.color = '#0f1b2d';
       noteEl.style.color = '#1f2d45';
-      if (delEl) delEl.style.color = '#22395c';
     } else {
       titleEl.style.color = '#fff';
       noteEl.style.color = '#eaf0ff';
-      if (delEl) delEl.style.color = '#f5f8ff';
     }
+    if (delEl) delEl.style.color = '#f5f8ff';
+    if (hideEl) hideEl.style.color = '#f5f8ff';
+    if (enterEl) enterEl.style.color = '#f5f8ff';
   }
 
   function applyDistanceStyle(pin){
@@ -378,7 +377,7 @@
     pin.remove();
   }
 
-  function deletePinImmediate(pin){
+  async function deletePinImmediate(pin){
     const payload = {
       id: pin.dataset.id,
       title: pin.querySelector('.pin-title input').value,
@@ -390,19 +389,57 @@
     };
 
     if (mode === 'contexts') {
-      const ok = window.confirm('Delete context?\n\nThis will also delete all items inside this context.');
+      const ok = await confirmContextDelete(payload.title);
       if (!ok) return;
     }
 
-    fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id: payload.id})
-    });
+    // Prevent pending autosave from recreating a just-deleted card/context.
+    clearTimeout(pending.get(payload.id));
+    pending.delete(payload.id);
+
+    let res;
+    try {
+      res = await fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: payload.id})
+      });
+    } catch (_err) {
+      if (mode === 'contexts') {
+        showCanvasWarning('Unable to delete context. Please try again.');
+      }
+      return;
+    }
+    if (!res.ok && mode === 'contexts') {
+      // Compatibility fallback for embedded webview stacks that mishandle POST routes.
+      try {
+        const retry = await fetch('/api/contexts/delete?id=' + encodeURIComponent(payload.id));
+        if (retry.ok) {
+          res = retry;
+        } else {
+          const message = await retry.text();
+          showCanvasWarning(message || 'Unable to delete context');
+          return;
+        }
+      } catch (_err) {
+        showCanvasWarning('Unable to delete context. Please try again.');
+        return;
+      }
+    } else if (!res.ok) {
+      const message = await res.text();
+      if (mode === 'contexts') {
+        showCanvasWarning(message || 'Unable to delete context');
+      }
+      return;
+    }
 
     lensExempt.delete(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
     pin.remove();
+    if (mode === 'contexts') {
+      location.reload();
+      return;
+    }
     if (mode === 'focus') showUndo(payload);
   }
 
@@ -663,6 +700,5 @@
   renderLensButtons();
   applyLens();
 
-  window.setTimeout(dismissSplash, SPLASH_DISMISS_MS);
   window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); if (trayOpen) placeHiddenTray(); });
 })();
