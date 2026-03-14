@@ -16,6 +16,15 @@
 6. Add new context
 7. Enter a context and move to its associated canvas
 
+## Additional Functional Behaviors (Must Work)
+
+1. Deleting a card removes it from the system
+2. Deleting a context (after confirmation) removes the context and all associated focus cards
+3. Hidden tray count reflects the actual number of hidden cards in the current focus canvas
+4. Context title is editable in focus view
+5. Card height adjusts subtly based on sub-note length (single-line vs two-line)
+6. Card and font sizes update correctly based on center/periphery placement
+
 ## Non-Negotiable Behaviors
 
 1. Deleting a context must always require explicit confirmation
