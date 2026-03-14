@@ -77,6 +77,69 @@ func TestContextsAPIPartialUpdatePreservesCoordinates(t *testing.T) {
 	}
 }
 
+func TestItemsAPICreatesCardAndPersistsPayload(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	rr := postJSON(t, app.itemsAPI, map[string]any{
+		"id":        "t_item_create_1",
+		"contextId": "main-orbit",
+		"title":     "Created via API",
+		"subNote":   "persist all fields",
+		"x":         456.0,
+		"y":         321.0,
+		"color":     "var(--c4)",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var (
+		contextID string
+		title     string
+		subNote   string
+		x         float64
+		y         float64
+		color     string
+	)
+	if err := s.db.QueryRow(`SELECT context_id,title,sub_note,x,y,color FROM items WHERE id=?`, "t_item_create_1").Scan(&contextID, &title, &subNote, &x, &y, &color); err != nil {
+		t.Fatalf("query created item: %v", err)
+	}
+	if contextID != "main-orbit" || title != "Created via API" || subNote != "persist all fields" || x != 456.0 || y != 321.0 || color != "var(--c4)" {
+		t.Fatalf("unexpected persisted row: context=%q title=%q sub=%q x=%v y=%v color=%q", contextID, title, subNote, x, y, color)
+	}
+}
+
+func TestDeleteItemAPIRemovesCard(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	if err := s.update(Item{
+		ID:        "t_item_delete_1",
+		ContextID: "main-orbit",
+		Title:     "delete me",
+		SubNote:   "",
+		X:         123,
+		Y:         234,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	rr := postJSON(t, app.deleteItemAPI, map[string]any{"id": "t_item_delete_1"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE id=?`, "t_item_delete_1").Scan(&n); err != nil {
+		t.Fatalf("count deleted item: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected item to be deleted, count=%d", n)
+	}
+}
+
 func TestDeleteContextAPICascadesItems(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
