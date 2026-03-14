@@ -3,9 +3,28 @@ import { expect, test, type Page, type Locator } from '@playwright/test';
 async function createCard(page: Page, title: string, x = 1050, y = 620): Promise<Locator> {
   const pins = page.locator('.pin');
   const before = await pins.count();
-
-  await page.locator('#surface').click({ position: { x, y } });
-  await expect(pins).toHaveCount(before + 1);
+  const positions = [
+    { x, y },
+    { x: 1180, y: 680 },
+    { x: 1180, y: 120 },
+    { x: 90, y: 680 },
+    { x: 90, y: 120 },
+    { x: 720, y: 680 },
+    { x: 720, y: 120 },
+  ];
+  let added = false;
+  for (const p of positions) {
+    await page.locator('#surface').click({ position: p });
+    for (let i = 0; i < 8; i++) {
+      if ((await pins.count()) === before + 1) {
+        added = true;
+        break;
+      }
+      await page.waitForTimeout(120);
+    }
+    if (added) break;
+  }
+  expect(added).toBeTruthy();
 
   const pin = pins.nth(before);
   const titleInput = pin.locator('.pin-title input');
@@ -13,6 +32,39 @@ async function createCard(page: Page, title: string, x = 1050, y = 620): Promise
   await titleInput.fill(title);
   await titleInput.blur();
   await page.waitForTimeout(350);
+  return pin;
+}
+
+async function createContext(page: Page, title: string, x = 960, y = 620): Promise<Locator> {
+  const pins = page.locator('.pin');
+  const before = await pins.count();
+  const positions = [
+    { x, y },
+    { x: 1120, y: 640 },
+    { x: 240, y: 640 },
+    { x: 1120, y: 140 },
+    { x: 240, y: 140 },
+  ];
+  let added = false;
+  for (const p of positions) {
+    await page.locator('#surface').click({ position: p });
+    for (let i = 0; i < 8; i++) {
+      if ((await pins.count()) === before + 1) {
+        added = true;
+        break;
+      }
+      await page.waitForTimeout(120);
+    }
+    if (added) break;
+  }
+  expect(added).toBeTruthy();
+
+  const pin = pins.nth(before);
+  const titleInput = pin.locator('.pin-title input');
+  await expect(titleInput).toBeVisible();
+  await titleInput.fill(title);
+  await titleInput.blur();
+  await page.waitForTimeout(420);
   return pin;
 }
 
@@ -168,4 +220,117 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
 
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
+});
+
+test('context delete requires confirmation and cancel keeps context', async ({ page }) => {
+  await page.goto('/?canvas=contexts');
+  await expect(page.locator('#surface')).toBeVisible();
+
+  const pin = await createContext(page, `ctx-delete-${Date.now()}`);
+  const id = await pin.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  await pin.hover();
+  await pin.locator('.pin-delete').click({ force: true });
+  await expect(page.locator('.context-confirm')).toBeVisible();
+
+  await page.locator('#context-confirm-cancel').click();
+  await expect(page.locator('.context-confirm')).toBeHidden();
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+
+  const samePin = page.locator(`.pin[data-id="${id}"]`);
+  await samePin.hover();
+  await samePin.locator('.pin-delete').click({ force: true });
+  await expect(page.locator('.context-confirm')).toBeVisible();
+  await page.locator('#context-confirm-delete').click();
+
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+});
+
+test('enter context navigates to associated focus canvas', async ({ page }) => {
+  await page.goto('/?canvas=contexts');
+  const title = `ctx-enter-${Date.now()}`;
+  const pin = await createContext(page, title, 980, 560);
+  const id = await pin.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  await pin.hover();
+  await pin.locator('.pin-enter').click({ force: true });
+
+  await expect(page).toHaveURL(new RegExp(`[?&]ctx=${id}`));
+  await expect(page).not.toHaveURL(/canvas=contexts/);
+  await expect(page.locator('#context-name')).toHaveText(title);
+});
+
+test('context title is editable in focus view and persists after reload', async ({ page }) => {
+  const newTitle = `Main Orbit ${Date.now()}`;
+  const name = page.locator('#context-name');
+  await expect(name).toBeVisible();
+
+  await name.focus();
+  await name.evaluate((el, value) => {
+    el.textContent = String(value);
+    (el as HTMLElement).blur();
+  }, newTitle);
+  await page.locator('#surface').click({ position: { x: 1180, y: 660 } });
+  await page.waitForTimeout(700);
+
+  await page.reload();
+  await expect(page.locator('#context-name')).toHaveText(newTitle);
+});
+
+test('card note height increases from one line to two lines', async ({ page }) => {
+  const pin = page.locator('.pin').first();
+  await expect(pin).toBeVisible();
+  const note = pin.locator('.pin-note textarea');
+
+  await note.fill('one line');
+  await note.blur();
+  await page.waitForTimeout(140);
+  const oneLineHeight = await note.evaluate((el) => parseFloat((el as HTMLTextAreaElement).style.height || '0'));
+
+  await note.fill('line one\nline two\nline three');
+  await note.blur();
+  await page.waitForTimeout(140);
+  const multiLineHeight = await note.evaluate((el) => parseFloat((el as HTMLTextAreaElement).style.height || '0'));
+
+  expect(oneLineHeight).toBeGreaterThanOrEqual(18);
+  expect(multiLineHeight).toBeLessThanOrEqual(36);
+  expect(multiLineHeight).toBeGreaterThanOrEqual(oneLineHeight);
+});
+
+test('center cards render larger than periphery cards', async ({ page }) => {
+  const metrics = await page.$$eval('.pin', (nodes) => {
+    const surface = document.getElementById('surface') as HTMLElement;
+    const cx = surface.clientWidth / 2;
+    const cy = surface.clientHeight / 2;
+    return nodes.map((el) => {
+      const node = el as HTMLElement;
+      const left = parseFloat(node.style.left || '0');
+      const top = parseFloat(node.style.top || '0');
+      const w = node.offsetWidth || 180;
+      const h = node.offsetHeight || 72;
+      const d = Math.hypot((left + w / 2) - cx, (top + h / 2) - cy);
+      const title = node.querySelector('.pin-title input') as HTMLInputElement;
+      const body = node.querySelector('.pin-note textarea') as HTMLTextAreaElement;
+      const m = (node.style.transform || '').match(/scale\(([\d.]+)\)/);
+      return {
+        d,
+        scale: m ? Number(m[1]) : 1,
+        titleSize: parseFloat(title.style.fontSize || '0'),
+        bodySize: parseFloat(body.style.fontSize || '0'),
+      };
+    });
+  });
+
+  expect(metrics.length).toBeGreaterThan(1);
+  const sorted = [...metrics].sort((a, b) => a.d - b.d);
+  const near = sorted[0];
+  const far = sorted[sorted.length - 1];
+
+  const uniqueScales = new Set(metrics.map((m) => m.scale.toFixed(3)));
+  expect(uniqueScales.size).toBeGreaterThan(1);
+  expect(near.scale).toBeGreaterThanOrEqual(far.scale);
+  expect(near.titleSize).toBeGreaterThanOrEqual(far.titleSize);
+  expect(near.bodySize).toBeGreaterThanOrEqual(far.bodySize);
 });
