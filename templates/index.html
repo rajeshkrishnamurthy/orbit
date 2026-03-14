@@ -7,6 +7,18 @@
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
 </head>
 <body>
+  {{if not .MobileMode}}
+  <div class="splash" id="desktop-splash" aria-hidden="true">
+    <div class="splash__stack">
+      <img class="splash__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>
+      <div class="splash__wordmark">Orbit</div>
+      <div class="splash__owner">by Sumeru Enterprise Tiger</div>
+      <div class="splash__rotator" aria-live="polite">
+        <div class="splash__line is-visible" id="desktop-splash-line">Your active priorities in one beautiful canvas</div>
+      </div>
+    </div>
+  </div>
+  {{end}}
   <div class="wrap">
     <div class="app-title">
       <img class="app-title__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>

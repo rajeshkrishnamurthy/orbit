@@ -1,4 +1,37 @@
 (() => {
+  const splashEl = document.getElementById('desktop-splash');
+  const splashLineEl = document.getElementById('desktop-splash-line');
+  const splashLines = [
+    'Your active priorities in one beautiful canvas',
+    "For people who can't deal with task lists",
+    'Operational control, with calm'
+  ];
+  let splashIndex = 0;
+  let splashTimer = null;
+
+  function rotateSplashLine(){
+    if (!splashEl || !splashLineEl || splashEl.classList.contains('is-hidden')) return;
+    splashLineEl.classList.remove('is-visible');
+    window.setTimeout(() => {
+      splashIndex = (splashIndex + 1) % splashLines.length;
+      splashLineEl.textContent = splashLines[splashIndex];
+      splashLineEl.classList.add('is-visible');
+    }, 380);
+    splashTimer = window.setTimeout(rotateSplashLine, 2800);
+  }
+
+  function dismissSplash(){
+    if (!splashEl || splashEl.classList.contains('is-hidden')) return;
+    splashEl.classList.add('is-hidden');
+    if (splashTimer) window.clearTimeout(splashTimer);
+  }
+
+  if (splashEl && splashLineEl) {
+    splashLineEl.textContent = splashLines[0];
+    splashLineEl.classList.add('is-visible');
+    splashTimer = window.setTimeout(rotateSplashLine, 1200 + 2400);
+  }
+
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
   const boundaryEl = document.createElement('div');
@@ -626,5 +659,6 @@
   renderLensButtons();
   applyLens();
 
+  window.setTimeout(dismissSplash, 4600);
   window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); if (trayOpen) placeHiddenTray(); });
 })();
