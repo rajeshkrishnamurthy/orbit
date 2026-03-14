@@ -1,0 +1,22 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Orbit",
+  "outputfilename": "Orbit",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "Sumeru Enterprise Tiger",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Sumeru Enterprise Tiger",
+    "productName": "The Orbit",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright 2026 Sumeru Enterprise Tiger",
+    "comments": "The Orbit desktop application"
+  },
+  "nsisType": "multiple"
+}
