@@ -38,6 +38,15 @@ func postJSON(t *testing.T, h http.HandlerFunc, payload any) *httptest.ResponseR
 	return rr
 }
 
+func mustDecodeJSON[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
+	t.Helper()
+	var out T
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response json: %v (body=%q)", err, rr.Body.String())
+	}
+	return out
+}
+
 func TestContextsAPIPartialUpdatePreservesCoordinates(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -177,5 +186,179 @@ func TestNewStoreFailsWhenInitializedButDBMissing(t *testing.T) {
 	}
 	if _, statErr := os.Stat(dbPath); statErr == nil {
 		t.Fatalf("unexpected db created at %s", dbPath)
+	}
+}
+
+func TestHideItemAPIUpdatesHiddenFlagAndCount(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_1"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Hidden Test Context",
+		SubNote: "",
+		X:       500,
+		Y:       300,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+	if err := s.update(Item{
+		ID:        "t_hide_item_1",
+		ContextID: ctxID,
+		Title:     "hide-me",
+		SubNote:   "",
+		X:         111,
+		Y:         222,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	rr := postJSON(t, app.hideItemAPI, map[string]any{
+		"id":        "t_hide_item_1",
+		"contextId": ctxID,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK         bool `json:"ok"`
+		HiddenCount int `json:"hiddenCount"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+
+	var hidden int
+	if err := s.db.QueryRow(`SELECT hidden FROM items WHERE id=?`, "t_hide_item_1").Scan(&hidden); err != nil {
+		t.Fatalf("query hidden flag: %v", err)
+	}
+	if hidden != 1 {
+		t.Fatalf("expected hidden=1, got %d", hidden)
+	}
+
+	var dbHiddenCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, ctxID).Scan(&dbHiddenCount); err != nil {
+		t.Fatalf("query hidden count: %v", err)
+	}
+	if resp.HiddenCount != dbHiddenCount {
+		t.Fatalf("response hiddenCount %d != db hidden count %d", resp.HiddenCount, dbHiddenCount)
+	}
+}
+
+func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_2"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Unhide Test Context",
+		SubNote: "",
+		X:       520,
+		Y:       320,
+		Color:   "var(--c3)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+	if err := s.update(Item{
+		ID:        "t_hide_item_2",
+		ContextID: ctxID,
+		Title:     "unhide-me",
+		SubNote:   "",
+		X:         10,
+		Y:         20,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	if err := s.hide("t_hide_item_2", ctxID); err != nil {
+		t.Fatalf("hide item before unhide-at: %v", err)
+	}
+
+	targetX, targetY := 333.0, 444.0
+	rr := postJSON(t, app.unhideAtAPI, map[string]any{
+		"id":        "t_hide_item_2",
+		"contextId": ctxID,
+		"x":         targetX,
+		"y":         targetY,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var hidden int
+	var gotX, gotY float64
+	if err := s.db.QueryRow(`SELECT hidden,x,y FROM items WHERE id=?`, "t_hide_item_2").Scan(&hidden, &gotX, &gotY); err != nil {
+		t.Fatalf("query item after unhide-at: %v", err)
+	}
+	if hidden != 0 {
+		t.Fatalf("expected hidden=0 after unhide-at, got %d", hidden)
+	}
+	if gotX != targetX || gotY != targetY {
+		t.Fatalf("unexpected coordinates after unhide-at: got (%v,%v), want (%v,%v)", gotX, gotY, targetX, targetY)
+	}
+}
+
+func TestRevealAllAPIReturnsItemsAndClearsHiddenSet(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_3"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Reveal Test Context",
+		SubNote: "",
+		X:       540,
+		Y:       340,
+		Color:   "var(--c4)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+
+	for _, id := range []string{"t_reveal_item_1", "t_reveal_item_2"} {
+		if err := s.update(Item{
+			ID:        id,
+			ContextID: ctxID,
+			Title:     id,
+			SubNote:   "",
+			X:         100,
+			Y:         120,
+			Color:     "var(--c5)",
+		}); err != nil {
+			t.Fatalf("seed item %s: %v", id, err)
+		}
+		if err := s.hide(id, ctxID); err != nil {
+			t.Fatalf("hide item %s: %v", id, err)
+		}
+	}
+
+	rr := postJSON(t, app.revealAllAPI, map[string]any{"contextId": ctxID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK          bool   `json:"ok"`
+		Items       []Item `json:"items"`
+		HiddenCount int    `json:"hiddenCount"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 revealed items in response, got %d", len(resp.Items))
+	}
+	if resp.HiddenCount != 0 {
+		t.Fatalf("expected hiddenCount=0 in response, got %d", resp.HiddenCount)
+	}
+
+	var dbHiddenCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, ctxID).Scan(&dbHiddenCount); err != nil {
+		t.Fatalf("query hidden count after reveal-all: %v", err)
+	}
+	if dbHiddenCount != 0 {
+		t.Fatalf("expected 0 hidden items after reveal-all, got %d", dbHiddenCount)
 	}
 }
