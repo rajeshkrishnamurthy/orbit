@@ -6,6 +6,10 @@
     "For people who can't deal with task lists",
     'Operational control, with calm'
   ];
+  const SPLASH_INITIAL_HOLD_MS = 1200;
+  const SPLASH_LINE_HOLD_MS = 2400;
+  const SPLASH_TRANSITION_MS = 360;
+  const SPLASH_DISMISS_MS = SPLASH_INITIAL_HOLD_MS + SPLASH_LINE_HOLD_MS + SPLASH_TRANSITION_MS + SPLASH_LINE_HOLD_MS;
   let splashIndex = 0;
   let splashTimer = null;
 
@@ -16,8 +20,8 @@
       splashIndex = (splashIndex + 1) % splashLines.length;
       splashLineEl.textContent = splashLines[splashIndex];
       splashLineEl.classList.add('is-visible');
-    }, 380);
-    splashTimer = window.setTimeout(rotateSplashLine, 2800);
+    }, SPLASH_TRANSITION_MS);
+    splashTimer = window.setTimeout(rotateSplashLine, SPLASH_LINE_HOLD_MS + SPLASH_TRANSITION_MS);
   }
 
   function dismissSplash(){
@@ -29,7 +33,7 @@
   if (splashEl && splashLineEl) {
     splashLineEl.textContent = splashLines[0];
     splashLineEl.classList.add('is-visible');
-    splashTimer = window.setTimeout(rotateSplashLine, 1200 + 2400);
+    splashTimer = window.setTimeout(rotateSplashLine, SPLASH_INITIAL_HOLD_MS + SPLASH_LINE_HOLD_MS);
   }
 
   const surface = document.getElementById('surface');
@@ -659,6 +663,6 @@
   renderLensButtons();
   applyLens();
 
-  window.setTimeout(dismissSplash, 4600);
+  window.setTimeout(dismissSplash, SPLASH_DISMISS_MS);
   window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); if (trayOpen) placeHiddenTray(); });
 })();
