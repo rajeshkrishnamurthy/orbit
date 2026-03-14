@@ -172,3 +172,10 @@ This document defines concrete test cases derived from current code behavior.
 2. B6, B7, B8, F5 (hidden-card reliability)
 3. B1, B2, F1, F2, F4 (core edit workflows)
 4. F6, F7, F8, F3, F9, F10 (interaction and visual behavior)
+
+## Mutation Testing
+
+- Run `npm run test:mutation` for a full mutation pass on the Go package.
+- Run `npm run test:mutation:html` to generate `go-mutesting-report.html`.
+- Use targeted runs while adding tests:
+  - `go run github.com/avito-tech/go-mutesting/cmd/go-mutesting@latest --exec-timeout 20 --match '<regex>' .`

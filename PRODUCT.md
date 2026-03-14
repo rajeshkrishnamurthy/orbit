@@ -24,6 +24,9 @@
 4. Context title is editable in focus view
 5. Card height adjusts subtly based on sub-note length (single-line vs two-line)
 6. Card and font sizes update correctly based on center/periphery placement
+7. Deleting a card in focus view supports Undo restoration from the toast action
+8. Slipping (`!`) toggle can be set/unset and persists for the card
+9. New empty cards are discarded when focus leaves without content
 
 ## Non-Negotiable Behaviors
 
@@ -31,6 +34,8 @@
 2. Application updates must never reset existing user data
 3. Hidden cards must always be recoverable
 4. Card positions must persist across restart and updates
+5. Startup must prevent split-brain state when legacy `items.json` exists
+6. Legacy runtime data migration must preserve existing user data during path transitions
 
 ## Out of Scope (Current Phase)
 

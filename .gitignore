@@ -3,6 +3,8 @@
 *.log
 .DS_Store
 coverage.out
+go-mutesting-report.html
+report.json
 data/orbit.db
 data/orbit.db.bak
 data/.orbit_initialized
