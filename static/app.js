@@ -84,6 +84,8 @@
   const contextConfirmBodyEl = contextConfirm.querySelector('#context-confirm-body');
   const contextConfirmCancelEl = contextConfirm.querySelector('#context-confirm-cancel');
   const contextConfirmDeleteEl = contextConfirm.querySelector('#context-confirm-delete');
+  contextConfirm.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+  contextConfirm.addEventListener('click', (ev) => ev.stopPropagation());
 
   function confirmContextDelete(name){
     return new Promise((resolve) => {
@@ -686,12 +688,11 @@
   });
 
   surface.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray')) return;
+    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray') || e.target.closest('.context-confirm')) return;
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    const np = createPin({id: uid(), title: mode==='contexts' ? 'New Context' : '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
-    if (mode==='contexts') savePin(np);
+    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
     e.preventDefault();
   });
 

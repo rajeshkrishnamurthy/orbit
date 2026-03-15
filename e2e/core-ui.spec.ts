@@ -229,6 +229,12 @@ test('context delete requires confirmation and cancel keeps context', async ({ p
   const pin = await createContext(page, `ctx-delete-${Date.now()}`);
   const id = await pin.getAttribute('data-id');
   expect(id).toBeTruthy();
+  const contextsPosts: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/api/contexts')) {
+      contextsPosts.push(request.url());
+    }
+  });
 
   await pin.hover();
   await pin.locator('.pin-delete').click({ force: true });
@@ -237,6 +243,7 @@ test('context delete requires confirmation and cancel keeps context', async ({ p
   await page.locator('#context-confirm-cancel').click();
   await expect(page.locator('.context-confirm')).toBeHidden();
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  expect(contextsPosts).toHaveLength(0);
 
   const samePin = page.locator(`.pin[data-id="${id}"]`);
   await samePin.hover();
@@ -245,6 +252,26 @@ test('context delete requires confirmation and cancel keeps context', async ({ p
   await page.locator('#context-confirm-delete').click();
 
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+  expect(contextsPosts).toHaveLength(0);
+});
+
+test('blank context cards are discarded when left empty', async ({ page }) => {
+  await page.goto('/?canvas=contexts');
+  await expect(page.locator('#surface')).toBeVisible();
+
+  const pins = page.locator('.pin');
+  const before = await pins.count();
+
+  await page.locator('#surface').click({ position: { x: 1080, y: 640 } });
+  await expect(pins).toHaveCount(before + 1);
+
+  const blankPin = pins.nth(before);
+  const titleInput = blankPin.locator('.pin-title input');
+  await expect(titleInput).toBeFocused();
+  await expect(titleInput).toHaveValue('');
+
+  await titleInput.evaluate((el) => (el as HTMLInputElement).blur());
+  await expect(pins).toHaveCount(before);
 });
 
 test('enter context navigates to associated focus canvas', async ({ page }) => {
