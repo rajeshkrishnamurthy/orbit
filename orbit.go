@@ -37,6 +37,7 @@ type Item struct {
 	Color     string    `json:"color"`
 	Hidden    bool      `json:"hidden,omitempty"`
 	Slipping  bool      `json:"slipping,omitempty"`
+	Completed bool      `json:"completed,omitempty"`
 	InCenter  bool      `json:"inCenter,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -56,39 +57,13 @@ type Store struct {
 }
 
 func newStore(dbPath string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, err
-	}
-
-	hadDB := fileExists(dbPath)
-	initializedFlag := filepath.Join(filepath.Dir(dbPath), ".orbit_initialized")
-	legacyJSON := filepath.Join(filepath.Dir(dbPath), "items.json")
-
-	// Split-brain guard: runtime must not use active JSON alongside SQLite.
-	if fileExists(legacyJSON) {
-		return nil, errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
-	}
-
-	if hadDB {
-		_ = backupDB(dbPath)
-	} else if fileExists(initializedFlag) {
-		return nil, errors.New("orbit.db missing after initialization; refusing to reseed and risk state loss")
-	}
-
-	db, err := sql.Open("sqlite", dbPath)
+	hadDB, initializedFlag, err := prepareStorePath(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA synchronous = FULL`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+
+	db, err := openConfiguredDB(dbPath)
+	if err != nil {
 		return nil, err
 	}
 
@@ -109,17 +84,8 @@ func newStore(dbPath string) (*Store, error) {
 		return nil, err
 	}
 
-	if count == 0 {
-		if !hadDB && !fileExists(initializedFlag) {
-			if err := s.ensureInitialContexts(); err != nil {
-				return nil, err
-			}
-			if err := s.seedDefaults(); err != nil {
-				return nil, err
-			}
-		} else {
-			return nil, errors.New("sqlite is empty in an initialized environment; refusing silent reset")
-		}
+	if err := s.seedIfNeeded(count, hadDB, initializedFlag); err != nil {
+		return nil, err
 	}
 
 	if err := os.WriteFile(initializedFlag, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
@@ -127,6 +93,61 @@ func newStore(dbPath string) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+func prepareStorePath(dbPath string) (bool, string, error) {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, "", err
+	}
+
+	hadDB := fileExists(dbPath)
+	initializedFlag := filepath.Join(dir, ".orbit_initialized")
+	legacyJSON := filepath.Join(dir, "items.json")
+
+	// Split-brain guard: runtime must not use active JSON alongside SQLite.
+	if fileExists(legacyJSON) {
+		return false, "", errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
+	}
+	if hadDB {
+		_ = backupDB(dbPath)
+		return true, initializedFlag, nil
+	}
+	if fileExists(initializedFlag) {
+		return false, "", errors.New("orbit.db missing after initialization; refusing to reseed and risk state loss")
+	}
+	return false, initializedFlag, nil
+}
+
+func openConfiguredDB(dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	for _, pragma := range []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = FULL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA foreign_keys = ON`,
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			return nil, err
+		}
+	}
+	return db, nil
+}
+
+func (s *Store) seedIfNeeded(count int, hadDB bool, initializedFlag string) error {
+	if count != 0 {
+		return nil
+	}
+	if hadDB || fileExists(initializedFlag) {
+		return errors.New("sqlite is empty in an initialized environment; refusing silent reset")
+	}
+	if err := s.ensureInitialContexts(); err != nil {
+		return err
+	}
+	return s.seedDefaults()
 }
 
 func (s *Store) ensureSchema() error {
@@ -151,6 +172,7 @@ CREATE TABLE IF NOT EXISTS items (
   color TEXT NOT NULL,
   hidden INTEGER NOT NULL DEFAULT 0,
   slipping INTEGER NOT NULL DEFAULT 0,
+  completed INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
@@ -167,6 +189,10 @@ CREATE TABLE IF NOT EXISTS items (
 		return err
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		return err
 	}
@@ -219,8 +245,8 @@ func (s *Store) update(item Item) error {
 	createdAt := now.Format(time.RFC3339Nano)
 	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
 	_, err := s.db.Exec(`
-INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   sub_note=excluded.sub_note,
@@ -228,13 +254,19 @@ ON CONFLICT(id) DO UPDATE SET
   y=excluded.y,
   color=excluded.color,
   slipping=excluded.slipping,
+  completed=excluded.completed,
   updated_at=excluded.updated_at;
-`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), createdAt, now.Format(time.RFC3339Nano))
+`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), boolToInt(item.Completed), createdAt, now.Format(time.RFC3339Nano))
 	return err
 }
 
 func (s *Store) delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) setCompleted(id string, completed bool) error {
+	_, err := s.db.Exec(`UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
 	return err
 }
 
@@ -250,7 +282,7 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 }
 
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +291,7 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -276,7 +308,7 @@ func (s *Store) unhideAt(id, contextID string, x, y float64) error {
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=1 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +317,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -305,7 +337,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 }
 
 func (s *Store) snapshot(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,updated_at FROM items WHERE hidden=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +346,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -453,6 +485,7 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/", app.home)
 	mux.HandleFunc("/api/items", app.itemsAPI)
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
+	mux.HandleFunc("/api/items/complete", app.completeItemAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
 	mux.HandleFunc("/api/items/unhide-at", app.unhideAtAPI)
@@ -559,6 +592,35 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.delete(in.ID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"ok":true}`))
+}
+
+func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID        string `json:"id"`
+		Completed *bool  `json:"completed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	completed := true
+	if in.Completed != nil {
+		completed = *in.Completed
+	}
+	if err := a.store.setCompleted(in.ID, completed); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

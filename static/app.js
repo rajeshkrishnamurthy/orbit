@@ -7,14 +7,17 @@
   const items = window.__ITEMS__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
+  const UNDO_WINDOW_MS = 3000;
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
   let lensRatio = 0.68;
   const lensExempt = new Set();
+  let dragHaloActive = false;
   let activePin = null;
   let undoState = null;
   let trayOpen = false;
   let hiddenItemsCache = [];
+  const completionTransitions = new Map();
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
   toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Card color</span>';
@@ -215,6 +218,7 @@
     const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
     const cutoff = maxR() * lensRatio;
     const isCenterBand = d <= cutoff;
+    const proximity = proximityFactor(d);
 
     // Band-based sizing (semantic): Center = A, Periphery = B.
     let cardScale = isCenterBand ? 1.05 : 0.95;
@@ -231,6 +235,20 @@
     }
 
     pin.style.transform = `scale(${cardScale.toFixed(3)})`;
+    if (mode === 'focus') {
+      pin.dataset.band = isCenterBand ? 'center' : 'periphery';
+      const sat = isCenterBand ? (0.96 + proximity * 0.05) : (0.84 + proximity * 0.04);
+      const bright = isCenterBand ? (0.98 + proximity * 0.04) : (0.93 + proximity * 0.03);
+      const alpha = isCenterBand ? (0.97 + proximity * 0.03) : (0.88 + proximity * 0.06);
+      pin.style.setProperty('--pin-sat', sat.toFixed(3));
+      pin.style.setProperty('--pin-bright', bright.toFixed(3));
+      pin.style.setProperty('--pin-alpha', alpha.toFixed(3));
+    } else {
+      pin.dataset.band = 'neutral';
+      pin.style.removeProperty('--pin-sat');
+      pin.style.removeProperty('--pin-bright');
+      pin.style.removeProperty('--pin-alpha');
+    }
     const title = pin.querySelector('.pin-title input');
     const note = pin.querySelector('.pin-note textarea');
     title.style.fontSize = `${titleSize.toFixed(2)}px`;
@@ -315,12 +333,19 @@
 
   function updateBoundaryCue(forceShow){
     if (!boundaryEl) return;
-    if (lens === 'all') { boundaryEl.classList.remove('show'); return; }
     const r = maxR() * lensRatio;
+    surface.style.setProperty('--center-radius', r + 'px');
     boundaryEl.style.width = (r*2) + 'px';
     boundaryEl.style.height = (r*2) + 'px';
-    if (forceShow) boundaryEl.classList.add('show');
-    else boundaryEl.classList.toggle('show', lens !== 'all');
+    const shouldShow = forceShow || dragHaloActive || lens !== 'all';
+    boundaryEl.classList.toggle('show', shouldShow);
+  }
+
+  function setDragHalo(active){
+    if (dragHaloActive === active) return;
+    dragHaloActive = active;
+    surface.classList.toggle('focus-emphasis', active);
+    updateBoundaryCue(false);
   }
 
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -338,19 +363,32 @@
     pin.dataset.persistedTitle = pin.querySelector('.pin-title input').value;
     pin.dataset.persistedSubNote = pin.querySelector('.pin-note textarea').value;
   }
-  function savePin(pin){
-    const id = pin.dataset.id;
-    const payload = {
-      id,
+  function cancelPendingSave(id){
+    clearTimeout(pending.get(id));
+    pending.delete(id);
+  }
+  function pinPayload(pin){
+    return {
+      id: pin.dataset.id,
       contextId: currentContextId,
       title: pin.querySelector('.pin-title input').value,
       subNote: pin.querySelector('.pin-note textarea').value,
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
       color: pin.dataset.color || 'var(--c1)',
-      slipping: pin.dataset.slipping === 'true'
+      slipping: pin.dataset.slipping === 'true',
+      completed: pin.dataset.state === 'completed'
     };
-    clearTimeout(pending.get(id));
+  }
+  function setPinState(pin, state){
+    pin.dataset.state = state;
+    if (state !== 'active' && activePin === pin) setActivePin(null);
+  }
+  function savePin(pin){
+    if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
+    const id = pin.dataset.id;
+    const payload = pinPayload(pin);
+    cancelPendingSave(id);
     pending.set(id, setTimeout(() => {
       fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
         method:'POST',
@@ -364,6 +402,7 @@
   }
 
   function hidePinImmediate(pin){
+    cancelPendingSave(pin.dataset.id);
     fetch('/api/items/hide', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -380,15 +419,8 @@
   }
 
   async function deletePinImmediate(pin){
-    const payload = {
-      id: pin.dataset.id,
-      title: pin.querySelector('.pin-title input').value,
-      subNote: pin.querySelector('.pin-note textarea').value,
-      x: parseFloat(pin.style.left) || 0,
-      y: parseFloat(pin.style.top) || 0,
-      color: pin.dataset.color || 'var(--c1)',
-      slipping: pin.dataset.slipping === 'true'
-    };
+    if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
+    const payload = pinPayload(pin);
 
     if (mode === 'contexts') {
       const ok = await confirmContextDelete(payload.title);
@@ -396,8 +428,7 @@
     }
 
     // Prevent pending autosave from recreating a just-deleted card/context.
-    clearTimeout(pending.get(payload.id));
-    pending.delete(payload.id);
+    cancelPendingSave(payload.id);
 
     let res;
     try {
@@ -442,38 +473,131 @@
       location.reload();
       return;
     }
-    if (mode === 'focus') showUndo(payload);
+    if (mode === 'focus') showDeleteUndo(payload);
   }
 
   function clearUndo(){
     if (!undoState) return;
+    if (undoState.kind === 'complete') {
+      const transition = completionTransitions.get(undoState.id);
+      if (transition) {
+        clearTimeout(transition.exitTimer);
+        completionTransitions.delete(undoState.id);
+      }
+    }
     clearTimeout(undoState.timer);
     undoState.el.remove();
     undoState = null;
   }
 
-  function showUndo(payload){
+  function showUndoToast(message, kind, id, onUndo){
     clearUndo();
     const el = document.createElement('div');
     el.className = 'undo-toast';
-    el.innerHTML = '<span>Card deleted</span><button class="undo-btn">Undo</button>';
+    el.innerHTML = `<span>${message}</span><button class="undo-btn">Undo</button>`;
     const btn = el.querySelector('.undo-btn');
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
+      const ok = await onUndo();
+      if (ok !== false) clearUndo();
+    });
+    surface.appendChild(el);
+    undoState = {
+      id,
+      kind,
+      el,
+      timer: setTimeout(() => {
+        clearUndo();
+      }, UNDO_WINDOW_MS)
+    };
+  }
+  function showDeleteUndo(payload){
+    showUndoToast('Deleted', 'delete', payload.id, () => {
       createPin(payload, false, true);
       fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
       });
-      clearUndo();
+      return true;
     });
-    surface.appendChild(el);
-    undoState = {
-      el,
-      timer: setTimeout(() => {
-        clearUndo();
-      }, 4000)
-    };
+  }
+  function showCompleteUndo(pin, payload, token){
+    showUndoToast('Completed', 'complete', payload.id, async () => {
+      const current = completionTransitions.get(payload.id);
+      if (!current || current.token !== token) return false;
+      const res = await fetch('/api/items/complete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: payload.id, completed: false})
+      });
+      if (!res.ok) {
+        const message = await res.text();
+        showCanvasWarning(message || 'Unable to undo completion.');
+        return false;
+      }
+      clearTimeout(current.exitTimer);
+      completionTransitions.delete(payload.id);
+      let restoredPin = pin;
+      if (!pin.isConnected) {
+        restoredPin = createPin(payload, false, true);
+      }
+      restoredPin.classList.remove('pin--complete-pop', 'pin--complete-pulse', 'pin--complete-exit');
+      setPinState(restoredPin, 'active');
+      restoredPin.dataset.transitioning = 'false';
+      applyDistanceStyle(restoredPin);
+      restoredPin.style.display = inLens(restoredPin) ? '' : 'none';
+      setActivePin(restoredPin);
+      return true;
+    });
+  }
+  async function completePinImmediate(pin){
+    if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
+    if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
+    const payload = pinPayload(pin);
+    pin.dataset.transitioning = 'true';
+    cancelPendingSave(payload.id);
+    let res;
+    try {
+      res = await fetch('/api/items/complete', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: payload.id, completed: true})
+      });
+    } catch (_err) {
+      pin.dataset.transitioning = 'false';
+      showCanvasWarning('Unable to complete card. Please try again.');
+      return;
+    }
+    if (!res.ok) {
+      pin.dataset.transitioning = 'false';
+      const message = await res.text();
+      showCanvasWarning(message || 'Unable to complete card.');
+      return;
+    }
+    setPinState(pin, 'completed');
+    pin.dataset.transitioning = 'false';
+    pin.classList.add('pin--complete-pop', 'pin--complete-pulse');
+    if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
+    const token = Symbol(payload.id);
+    const exitTimer = setTimeout(() => {
+      const current = completionTransitions.get(payload.id);
+      if (!current || current.token !== token) return;
+      pin.classList.add('pin--complete-jiggle');
+      setTimeout(() => {
+        const latest = completionTransitions.get(payload.id);
+        if (!latest || latest.token !== token) return;
+        pin.classList.add('pin--complete-exit');
+      }, 240);
+      setTimeout(() => {
+        const latest = completionTransitions.get(payload.id);
+        if (!latest || latest.token !== token) return;
+        if (activePin === pin) setActivePin(null);
+        pin.remove();
+        latest.removed = true;
+      }, 1220);
+    }, 120);
+    completionTransitions.set(payload.id, {token, exitTimer, removed: false});
+    showCompleteUndo(pin, payload, token);
   }
 
   function discardIfEmpty(pin){
@@ -496,11 +620,13 @@
     const del = pin.querySelector('.pin-delete');
     const hide = pin.querySelector('.pin-hide');
     const slip = pin.querySelector('.pin-slip');
+    const complete = pin.querySelector('.pin-complete');
     if (slip) {
       slip.addEventListener('pointerdown', ev => ev.stopPropagation());
       slip.addEventListener('click', ev => {
         ev.preventDefault();
         ev.stopPropagation();
+        if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
         const on = pin.dataset.slipping !== 'true';
         setSlipping(pin, on);
         savePin(pin);
@@ -513,6 +639,14 @@
         ev.stopPropagation();
         if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
         hidePinImmediate(pin);
+      });
+    }
+    if (complete) {
+      complete.addEventListener('pointerdown', ev => ev.stopPropagation());
+      complete.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        completePinImmediate(pin);
       });
     }
     const enter = pin.querySelector('.pin-enter');
@@ -528,12 +662,20 @@
       del.addEventListener('click', ev => {
         ev.preventDefault();
         ev.stopPropagation();
-        if (pin.dataset.saved !== 'true') return;
+        if (pin.dataset.saved !== 'true') {
+          pin.classList.add('discarding');
+          setTimeout(() => {
+            if (activePin === pin) setActivePin(null);
+            pin.remove();
+          }, 120);
+          return;
+        }
         deletePinImmediate(pin);
       });
     }
 
     pin.addEventListener('pointerdown', (e) => {
+      if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
       setActivePin(pin);
       const rect = pin.getBoundingClientRect();
       const surfRect = surface.getBoundingClientRect();
@@ -550,6 +692,7 @@
           dragging = true;
           pin.classList.add('dragging');
           pin.setPointerCapture(e.pointerId);
+          if (mode === 'focus') setDragHalo(true);
           if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
         }
         const w = pin.offsetWidth || rect.width;
@@ -566,6 +709,7 @@
         if (dragging) {
           pin.classList.remove('dragging');
           pin.releasePointerCapture(ev.pointerId);
+          if (mode === 'focus') setDragHalo(false);
           applyDistanceStyle(pin);
           savePin(pin); // no snap/reassign/normalize
         }
@@ -634,6 +778,8 @@
     const pin = document.createElement('article');
     pin.className = 'pin';
     pin.dataset.id = item.id;
+    pin.dataset.state = item.completed ? 'completed' : 'active';
+    pin.dataset.transitioning = 'false';
     if (markSaved) lensExempt.delete(item.id);
     else lensExempt.add(item.id);
     pin.dataset.saved = markSaved ? 'true' : 'false';
@@ -642,7 +788,8 @@
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
     const hideBtn = mode === 'focus' ? '<button class=\"pin-hide\" aria-label=\"Hide card\" title=\"Hide\">–</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
-    pin.innerHTML = `${hideBtn}${enterBtn}${slipBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    const completeBtn = mode === 'focus' ? '<button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button>' : '';
+    pin.innerHTML = `${hideBtn}${enterBtn}${slipBtn}${completeBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
@@ -666,13 +813,23 @@
 
   surface.addEventListener('dragover', (e) => {
     if (!trayOpen) return;
-    if (e.dataTransfer && e.dataTransfer.types.includes('text/orbit-hidden-id')) e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.types.includes('text/orbit-hidden-id')) {
+      e.preventDefault();
+      if (mode === 'focus') setDragHalo(true);
+    }
+  });
+
+  surface.addEventListener('dragleave', (e) => {
+    if (!trayOpen || mode !== 'focus') return;
+    const next = e.relatedTarget;
+    if (!next || !surface.contains(next)) setDragHalo(false);
   });
 
   surface.addEventListener('drop', async (e) => {
     const id = e.dataTransfer && e.dataTransfer.getData('text/orbit-hidden-id');
     if (!id) return;
     e.preventDefault();
+    if (mode === 'focus') setDragHalo(false);
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));

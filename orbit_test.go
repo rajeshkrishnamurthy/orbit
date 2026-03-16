@@ -180,6 +180,117 @@ func TestDeleteItemAPIRemovesCard(t *testing.T) {
 	}
 }
 
+func TestCompleteItemAPIMarksItemCompletedAndRemovesFromSnapshot(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	if err := s.update(Item{
+		ID:        "t_item_complete_1",
+		ContextID: "main-orbit",
+		Title:     "complete me",
+		SubNote:   "",
+		X:         120,
+		Y:         240,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	rr := postJSON(t, app.completeItemAPI, map[string]any{
+		"id":        "t_item_complete_1",
+		"completed": true,
+	})
+	assertJSONResponse(t, rr, http.StatusOK)
+
+	var completed, hidden int
+	if err := s.db.QueryRow(`SELECT completed,hidden FROM items WHERE id=?`, "t_item_complete_1").Scan(&completed, &hidden); err != nil {
+		t.Fatalf("query completed item: %v", err)
+	}
+	if completed != 1 {
+		t.Fatalf("expected completed=1, got %d", completed)
+	}
+	if hidden != 0 {
+		t.Fatalf("expected hidden=0, got %d", hidden)
+	}
+
+	items, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, it := range items {
+		if it.ID == "t_item_complete_1" {
+			t.Fatalf("completed item remained in live snapshot")
+		}
+	}
+}
+
+func TestCompleteItemAPIUndoRestoresItemInOriginalContext(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_complete_restore"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Restore Context",
+		SubNote: "",
+		X:       300,
+		Y:       200,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("seed context: %v", err)
+	}
+	if err := s.update(Item{
+		ID:        "t_item_complete_2",
+		ContextID: ctxID,
+		Title:     "undo me",
+		SubNote:   "",
+		X:         222,
+		Y:         111,
+		Color:     "var(--c3)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	completeRR := postJSON(t, app.completeItemAPI, map[string]any{
+		"id":        "t_item_complete_2",
+		"completed": true,
+	})
+	assertJSONResponse(t, completeRR, http.StatusOK)
+
+	restoreRR := postJSON(t, app.completeItemAPI, map[string]any{
+		"id":        "t_item_complete_2",
+		"completed": false,
+	})
+	assertJSONResponse(t, restoreRR, http.StatusOK)
+
+	var contextID string
+	var completed int
+	if err := s.db.QueryRow(`SELECT context_id,completed FROM items WHERE id=?`, "t_item_complete_2").Scan(&contextID, &completed); err != nil {
+		t.Fatalf("query restored item: %v", err)
+	}
+	if contextID != ctxID {
+		t.Fatalf("expected context %q, got %q", ctxID, contextID)
+	}
+	if completed != 0 {
+		t.Fatalf("expected completed=0, got %d", completed)
+	}
+
+	items, err := s.snapshot(ctxID)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	found := false
+	for _, it := range items {
+		if it.ID == "t_item_complete_2" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected restored item in original context snapshot")
+	}
+}
+
 func TestDeleteContextAPICascadesItems(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -500,6 +611,7 @@ func TestHandlersRejectWrongMethodAndInvalidPayload(t *testing.T) {
 		{name: "items get 405", h: app.itemsAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "items missing id 400", h: app.itemsAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "delete item missing id 400", h: app.deleteItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
+		{name: "complete item missing id 400", h: app.completeItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "hide item missing id 400", h: app.hideItemAPI, method: http.MethodPost, body: `{"contextId":"main-orbit"}`, code: http.StatusBadRequest},
 		{name: "contexts get 405", h: app.contextsAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "delete contexts get missing id 400", h: app.deleteContextAPI, method: http.MethodGet, body: "", code: http.StatusBadRequest},
@@ -793,6 +905,28 @@ func TestAPIResponsesUseJSONContentTypeAndExpectedBodies(t *testing.T) {
 		}
 	})
 
+	t.Run("complete success body", func(t *testing.T) {
+		if err := s.update(Item{
+			ID:        "t_api_resp_item_complete",
+			ContextID: ctxID,
+			Title:     "Complete me",
+			SubNote:   "",
+			X:         140,
+			Y:         120,
+			Color:     "var(--c4)",
+		}); err != nil {
+			t.Fatalf("seed complete item: %v", err)
+		}
+		rr := postJSON(t, app.completeItemAPI, map[string]any{
+			"id":        "t_api_resp_item_complete",
+			"completed": true,
+		})
+		assertJSONResponse(t, rr, http.StatusOK)
+		if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
+			t.Fatalf("unexpected body: %q", got)
+		}
+	})
+
 	t.Run("contexts and delete context success bodies", func(t *testing.T) {
 		createRR := postJSON(t, app.contextsAPI, map[string]any{
 			"id":      "t_api_resp_ctx_delete",
@@ -844,6 +978,7 @@ func TestAPIsRejectMalformedJSONAndWrongMethods(t *testing.T) {
 	}{
 		{name: "items bad json", h: app.itemsAPI},
 		{name: "delete item bad json", h: app.deleteItemAPI},
+		{name: "complete item bad json", h: app.completeItemAPI},
 		{name: "hide item bad json", h: app.hideItemAPI},
 		{name: "unhide-at bad json", h: app.unhideAtAPI},
 		{name: "contexts bad json", h: app.contextsAPI},
@@ -871,6 +1006,7 @@ func TestAPIsRejectMalformedJSONAndWrongMethods(t *testing.T) {
 		method string
 	}{
 		{name: "delete item method", h: app.deleteItemAPI, method: http.MethodGet},
+		{name: "complete item method", h: app.completeItemAPI, method: http.MethodGet},
 		{name: "hide item method", h: app.hideItemAPI, method: http.MethodGet},
 		{name: "reveal all method", h: app.revealAllAPI, method: http.MethodGet},
 		{name: "hidden items method", h: app.hiddenItemsAPI, method: http.MethodGet},

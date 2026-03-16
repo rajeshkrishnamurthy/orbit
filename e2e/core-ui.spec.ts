@@ -222,6 +222,58 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
 });
 
+test('complete shows acknowledgment, supports undo, and expires after 3s', async ({ page }) => {
+  const title = `complete-${Date.now()}`;
+  const created = await createCard(page, title, 1180, 240);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  const completeButton = created.locator('.pin-complete');
+  await created.hover();
+  await expect(completeButton).toHaveText('✓');
+  await expect(completeButton).toHaveAttribute('aria-label', 'Complete card');
+  await expect(created.locator('.pin-slip')).toBeVisible();
+  await completeButton.click({ force: true });
+
+  const samePin = page.locator(`.pin[data-id="${id}"]`);
+  await expect(samePin).toHaveAttribute('data-state', 'completed');
+  await expect(page.locator('.undo-toast')).toContainText('Completed');
+  await page.waitForTimeout(1500);
+  await expect(page.locator('.undo-toast')).toContainText('Completed');
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+
+  await page.locator('.undo-btn').click();
+  await expect(page.locator('.undo-toast')).toHaveCount(0);
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveAttribute('data-state', 'active');
+
+  await samePin.hover();
+  await samePin.locator('.pin-complete').click({ force: true });
+  await expect(page.locator('.undo-toast')).toContainText('Completed');
+  await page.waitForTimeout(3200);
+
+  await expect(page.locator('.undo-toast')).toHaveCount(0);
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+});
+
+test('delete in focus uses undo without confirmation modal', async ({ page }) => {
+  const title = `delete-${Date.now()}`;
+  const created = await createCard(page, title, 1160, 320);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  await created.hover();
+  await created.locator('.pin-delete').click({ force: true });
+
+  await expect(page.locator('.context-confirm')).toBeHidden();
+  await expect(page.locator('.undo-toast')).toContainText('Deleted');
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+
+  await page.locator('.undo-btn').click();
+  await expect(page.locator('.undo-toast')).toHaveCount(0);
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+});
+
 test('context delete requires confirmation and cancel keeps context', async ({ page }) => {
   await page.goto('/?canvas=contexts');
   await expect(page.locator('#surface')).toBeVisible();
