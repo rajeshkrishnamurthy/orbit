@@ -691,6 +691,20 @@
       const startX = e.clientX;
       const startY = e.clientY;
       let dragging = false;
+      const pointerId = e.pointerId;
+      let pointerCaptured = false;
+      let ended = false;
+
+      const cleanup = () => {
+        if (ended) return;
+        ended = true;
+        pin.removeEventListener('pointermove', onMove);
+        pin.removeEventListener('pointerup', onUp);
+        pin.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('lostpointercapture', onUp);
+      };
 
       const onMove = (ev) => {
         const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
@@ -698,7 +712,10 @@
         if (!dragging) {
           dragging = true;
           pin.classList.add('dragging');
-          pin.setPointerCapture(e.pointerId);
+          try {
+            pin.setPointerCapture(pointerId);
+            pointerCaptured = true;
+          } catch (_err) {}
           if (mode === 'focus') setDragHalo(true);
           if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
         }
@@ -713,21 +730,26 @@
       };
 
       const onUp = (ev) => {
+        cleanup();
         if (dragging) {
           pin.classList.remove('dragging');
-          pin.releasePointerCapture(ev.pointerId);
+          if (pointerCaptured && pin.hasPointerCapture(ev.pointerId)) {
+            try {
+              pin.releasePointerCapture(ev.pointerId);
+            } catch (_err) {}
+          }
           if (mode === 'focus') setDragHalo(false);
           applyDistanceStyle(pin);
           savePin(pin); // no snap/reassign/normalize
         }
-        pin.removeEventListener('pointermove', onMove);
-        pin.removeEventListener('pointerup', onUp);
-        pin.removeEventListener('pointercancel', onUp);
       };
 
       pin.addEventListener('pointermove', onMove);
       pin.addEventListener('pointerup', onUp);
       pin.addEventListener('pointercancel', onUp);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      window.addEventListener('lostpointercapture', onUp);
     });
 
     pin.querySelectorAll('input, textarea').forEach(input => {
