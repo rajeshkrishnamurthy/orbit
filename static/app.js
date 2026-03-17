@@ -8,6 +8,7 @@
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const UNDO_WINDOW_MS = 3000;
+  const DRAG_THRESHOLD_PX = 5;
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
   let lensRatio = 0.68;
@@ -708,7 +709,7 @@
 
       const onMove = (ev) => {
         const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-        if (!dragging && dist < 3) return;
+        if (!dragging && dist < DRAG_THRESHOLD_PX) return;
         if (!dragging) {
           dragging = true;
           pin.classList.add('dragging');
