@@ -15,7 +15,13 @@
 .pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease, filter .18s ease, background .16s ease, border-color .16s ease;box-shadow:0 8px 16px rgba(8,12,24,.20),inset 0 1px 0 rgba(255,255,255,.13),inset 0 -1px 0 rgba(0,0,0,.10);filter:saturate(var(--pin-sat,.94)) brightness(var(--pin-bright,.98));opacity:var(--pin-alpha,.97);z-index:4}
 .pin::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(160deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,.00) 42%,rgba(0,0,0,.04) 100%)}
 .pin::after{content:"";position:absolute;inset:1px;border-radius:10px;pointer-events:none;border:1px solid rgba(255,255,255,.06)}
+.pin-edge{position:absolute;display:block;background:transparent;cursor:grab;z-index:1}
+.pin-edge--top{left:0;right:0;top:0;height:8px;border-radius:12px 12px 0 0}
+.pin-edge--right{top:0;right:0;bottom:0;width:8px;border-radius:0 12px 12px 0}
+.pin-edge--bottom{left:0;right:0;bottom:0;height:8px;border-radius:0 0 12px 12px}
+.pin-edge--left{top:0;left:0;bottom:0;width:8px;border-radius:12px 0 0 12px}
 .pin.dragging{box-shadow:0 16px 30px rgba(8,12,24,.34),inset 0 1px 0 rgba(255,255,255,.18),inset 0 -1px 0 rgba(0,0,0,.14);cursor:grabbing}
+.pin.dragging .pin-edge{cursor:grabbing}
 .pin[data-band="center"]{--pin-alpha:.985;--pin-sat:1;--pin-bright:1}
 .pin[data-band="periphery"]{--pin-alpha:.92;--pin-sat:.88;--pin-bright:.95}
 .pin.dragging,.pin.selected{--pin-alpha:1;--pin-sat:1;--pin-bright:1}
@@ -25,6 +31,7 @@
 .pin[data-state="completed"] .pin-note textarea{opacity:.82}
 .pin.discarding{opacity:0;pointer-events:none}
 .pin-title{margin:0;display:block;line-height:1.2;letter-spacing:.01em}.pin-note{margin:4px 0 0;line-height:1.3}
+.pin-title,.pin-note{position:relative;z-index:2}
 .pin input,.pin textarea{width:100%;border:none;background:transparent;outline:none;color:inherit;font:inherit;padding:0;cursor:inherit}
 .pin input:focus,.pin textarea:focus{cursor:text}
 .pin textarea{resize:none;overflow:hidden;min-height:1.25em;max-height:2.5em;line-height:1.25;white-space:pre-wrap}

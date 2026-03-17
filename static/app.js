@@ -8,6 +8,7 @@
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const UNDO_WINDOW_MS = 3000;
+  const DRAG_THRESHOLD_PX = 5;
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
   let lensRatio = 0.68;
@@ -237,8 +238,8 @@
     pin.style.transform = `scale(${cardScale.toFixed(3)})`;
     if (mode === 'focus') {
       pin.dataset.band = isCenterBand ? 'center' : 'periphery';
-      const sat = isCenterBand ? (0.96 + proximity * 0.05) : (0.84 + proximity * 0.04);
-      const bright = isCenterBand ? (0.98 + proximity * 0.04) : (0.93 + proximity * 0.03);
+      const sat = isCenterBand ? (0.96 + proximity * 0.05) : (0.88 + proximity * 0.05);
+      const bright = isCenterBand ? (0.98 + proximity * 0.04) : (0.95 + proximity * 0.04);
       const alpha = isCenterBand ? (0.97 + proximity * 0.03) : (0.88 + proximity * 0.06);
       pin.style.setProperty('--pin-sat', sat.toFixed(3));
       pin.style.setProperty('--pin-bright', bright.toFixed(3));
@@ -691,14 +692,31 @@
       const startX = e.clientX;
       const startY = e.clientY;
       let dragging = false;
+      const pointerId = e.pointerId;
+      let pointerCaptured = false;
+      let ended = false;
+
+      const cleanup = () => {
+        if (ended) return;
+        ended = true;
+        pin.removeEventListener('pointermove', onMove);
+        pin.removeEventListener('pointerup', onUp);
+        pin.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+        window.removeEventListener('lostpointercapture', onUp);
+      };
 
       const onMove = (ev) => {
         const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-        if (!dragging && dist < 3) return;
+        if (!dragging && dist < DRAG_THRESHOLD_PX) return;
         if (!dragging) {
           dragging = true;
           pin.classList.add('dragging');
-          pin.setPointerCapture(e.pointerId);
+          try {
+            pin.setPointerCapture(pointerId);
+            pointerCaptured = true;
+          } catch (_err) {}
           if (mode === 'focus') setDragHalo(true);
           if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
         }
@@ -713,21 +731,26 @@
       };
 
       const onUp = (ev) => {
+        cleanup();
         if (dragging) {
           pin.classList.remove('dragging');
-          pin.releasePointerCapture(ev.pointerId);
+          if (pointerCaptured && pin.hasPointerCapture(ev.pointerId)) {
+            try {
+              pin.releasePointerCapture(ev.pointerId);
+            } catch (_err) {}
+          }
           if (mode === 'focus') setDragHalo(false);
           applyDistanceStyle(pin);
           savePin(pin); // no snap/reassign/normalize
         }
-        pin.removeEventListener('pointermove', onMove);
-        pin.removeEventListener('pointerup', onUp);
-        pin.removeEventListener('pointercancel', onUp);
       };
 
       pin.addEventListener('pointermove', onMove);
       pin.addEventListener('pointerup', onUp);
       pin.addEventListener('pointercancel', onUp);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      window.addEventListener('lostpointercapture', onUp);
     });
 
     pin.querySelectorAll('input, textarea').forEach(input => {
@@ -792,11 +815,12 @@
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
+    const edgeTargets = '<span class="pin-edge pin-edge--top" aria-hidden="true"></span><span class="pin-edge pin-edge--right" aria-hidden="true"></span><span class="pin-edge pin-edge--bottom" aria-hidden="true"></span><span class="pin-edge pin-edge--left" aria-hidden="true"></span>';
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
     const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div>' : '';
     const deleteBtn = mode === 'contexts' ? '<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button>' : '';
-    pin.innerHTML = `${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    pin.innerHTML = `${edgeTargets}${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
