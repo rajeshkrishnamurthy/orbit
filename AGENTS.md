@@ -1,5 +1,7 @@
 # AGENTS.md
 
+Follow global AGENTS at ~/.openclaw/codex-global/AGENTS.md
+
 ## Repo workflows
 
 - Browser mode: `go run ./cmd/web`

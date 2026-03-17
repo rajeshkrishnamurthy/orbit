@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Orbit — Post-splash first use (v2)</title>
+<style>
+:root{
+  --bg-deep:#0b1020;
+  --bg-mid:#151e38;
+  --ink:#eaf0ff;
+  --muted:#9eabd1;
+  --line:#3a4775;
+  --accent:#6e8cff;
+  --accent-2:#7d75d8;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  background:radial-gradient(1200px 700px at 50% -20%,#243156 0%,#141b34 38%,#0b1020 78%);
+  color:var(--ink);
+}
+.frame{max-width:1280px;margin:18px auto;padding:0 14px}
+.surface{
+  position:relative;
+  height:760px;
+  border:1px solid #2b365f;
+  border-radius:22px;
+  background:radial-gradient(circle at 50% 50%,#182244 0%,#121936 45%,#0c1226 100%);
+  overflow:hidden;
+  --center-radius:212px;
+}
+.surface::before,
+.surface::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  z-index:1;
+  transition:opacity .22s ease;
+}
+.surface::before{
+  background:radial-gradient(circle at 50% 50%,rgba(119,151,240,.18) 0%,rgba(109,140,231,.12) 18%,rgba(84,114,194,.06) 38%,rgba(36,50,92,.00) 72%);
+  opacity:.52;
+}
+.surface::after{
+  background:radial-gradient(circle at 50% 50%,rgba(95,123,196,.10) 0%,rgba(95,123,196,.055) calc(var(--center-radius) - 58px),rgba(95,123,196,.026) calc(var(--center-radius) + 18px),rgba(95,123,196,.00) calc(var(--center-radius) + 126px));
+  opacity:.24;
+}
+.surface.dragging::before{opacity:.78}
+.surface.dragging::after{opacity:.46}
+
+.orbit{position:absolute;border:1px dashed rgba(162,177,232,.28);border-radius:999px;opacity:.24;pointer-events:none;z-index:2}
+.o1{inset:305px 515px}.o2{inset:228px 414px}.o3{inset:138px 292px}.o4{inset:42px 154px}
+
+.center-boundary{
+  position:absolute;
+  left:50%;top:50%;
+  transform:translate(-50%,-50%);
+  width:calc(var(--center-radius) * 2);
+  height:calc(var(--center-radius) * 2);
+  border:1px solid rgba(201,214,255,.24);
+  border-radius:999px;
+  opacity:0;
+  pointer-events:none;
+  z-index:3;
+  transition:opacity .14s ease;
+}
+.surface.dragging .center-boundary{opacity:1}
+
+.header{
+  position:absolute;
+  left:14px;top:14px;
+  z-index:20;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 10px;
+  border-radius:10px;
+  border:1px solid rgba(52,68,118,.58);
+  background:rgba(9,13,26,.35);
+  backdrop-filter:blur(2px);
+}
+.header .dot{width:10px;height:10px;border-radius:999px;background:linear-gradient(180deg,#9bb3ff,#6a86f0);box-shadow:0 0 12px rgba(124,148,242,.4)}
+.header b{font-size:14px;letter-spacing:.01em}
+.header span{font-size:12px;color:#b9c6ec}
+
+.first-use-panel{
+  position:absolute;
+  left:50%;top:50%;
+  transform:translate(-50%,-50%);
+  width:min(560px,88%);
+  z-index:10;
+  text-align:center;
+  padding:28px 22px 22px;
+  border-radius:16px;
+  border:1px solid rgba(84,102,158,.58);
+  background:linear-gradient(180deg,rgba(14,20,40,.72),rgba(12,18,36,.56));
+  backdrop-filter:blur(4px);
+  transition:opacity .2s ease, transform .2s ease;
+}
+.first-use-panel.hidden{opacity:0;transform:translate(-50%,-48%);pointer-events:none}
+.kicker{font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:#afbadf}
+h1{margin:8px 0 6px;font-size:31px;line-height:1.16}
+.sub{margin:0 0 14px;color:var(--muted);font-size:14px}
+.composer{display:flex;gap:8px;align-items:center;justify-content:center}
+.input{
+  width:min(420px,100%);
+  border-radius:12px;
+  border:1px solid #42518a;
+  background:rgba(10,16,33,.84);
+  color:var(--ink);
+  padding:12px 14px;
+  font-size:15px;
+  outline:none;
+}
+.input:focus{border-color:#6e8cff;box-shadow:0 0 0 3px rgba(110,140,255,.15)}
+.add-btn{
+  border:none;
+  border-radius:12px;
+  padding:11px 14px;
+  font-weight:600;
+  color:#f3f6ff;
+  background:linear-gradient(180deg,#6d85e8,#4f68c4);
+  cursor:pointer;
+}
+.examples{margin-top:12px;font-size:12px;color:#95a4d2}
+.examples span{display:inline-block;margin:0 4px 6px;padding:3px 8px;border:1px solid rgba(255,255,255,.16);border-radius:999px}
+
+.tip{
+  position:absolute;
+  left:50%;bottom:14px;
+  transform:translateX(-50%);
+  z-index:22;
+  font-size:12px;
+  color:#d5dfff;
+  border:1px solid rgba(64,84,144,.7);
+  background:rgba(10,16,32,.72);
+  border-radius:10px;
+  padding:7px 10px;
+  opacity:0;
+  transition:opacity .2s ease;
+}
+.tip.show{opacity:1}
+
+.pin{
+  position:absolute;
+  min-width:196px;
+  max-width:248px;
+  border-radius:12px;
+  border:1px solid rgba(255,255,255,.22);
+  background:var(--accent);
+  color:#f3f7ff;
+  padding:11px 13px;
+  box-shadow:0 10px 22px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.14);
+  user-select:none;
+  cursor:grab;
+  touch-action:none;
+  transform-origin:center center;
+  transition:transform .12s ease, filter .16s ease, opacity .14s ease;
+  z-index:8;
+  --sat:.9;
+  --bright:.96;
+  --alpha:.92;
+  filter:saturate(var(--sat)) brightness(var(--bright));
+  opacity:var(--alpha);
+}
+.pin b{display:block;font-size:15px;line-height:1.2}
+.pin p{margin:4px 0 0;font-size:12px;line-height:1.3;opacity:.95}
+.pin.in-center{--sat:1;--bright:1;--alpha:1;transform:scale(1.03)}
+.pin.in-periphery{--sat:.84;--bright:.93;--alpha:.88;transform:scale(.96)}
+.pin.dragging{cursor:grabbing;--sat:1;--bright:1;--alpha:1;transform:scale(1.02);box-shadow:0 16px 30px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.18)}
+
+@media (max-width:820px){
+  .surface{height:680px}
+  .o1{inset:280px 448px}.o2{inset:210px 350px}.o3{inset:128px 240px}.o4{inset:54px 120px}
+  .first-use-panel{padding:24px 16px 18px}
+  h1{font-size:25px}
+  .composer{flex-direction:column;align-items:stretch}
+}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="surface" id="surface">
+    <div class="header"><div class="dot"></div><b>Main Orbit</b><span>First use</span></div>
+
+    <div class="orbit o1"></div>
+    <div class="orbit o2"></div>
+    <div class="orbit o3"></div>
+    <div class="orbit o4"></div>
+    <div class="center-boundary"></div>
+
+    <section class="first-use-panel" id="firstUsePanel">
+      <div class="kicker">First step</div>
+      <h1>What needs active attention now?</h1>
+      <p class="sub">Start with one priority. You can place it where it belongs.</p>
+      <div class="composer">
+        <input id="firstInput" class="input" placeholder="e.g., Close DBS commercial model"/>
+        <button id="addBtn" class="add-btn">Place In Orbit</button>
+      </div>
+      <div class="examples">
+        <span>Funding reset</span><span>Rate negotiation</span><span>Family trust structure</span>
+      </div>
+    </section>
+
+    <div class="tip" id="tip">Drag to position. Closer to center feels more active.</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const surface = document.getElementById('surface');
+  const panel = document.getElementById('firstUsePanel');
+  const input = document.getElementById('firstInput');
+  const addBtn = document.getElementById('addBtn');
+  const tip = document.getElementById('tip');
+
+  const center = () => ({ x: surface.clientWidth / 2, y: surface.clientHeight / 2 });
+  const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
+  const lensRatio = 0.68;
+
+  function classify(pin){
+    const w = pin.offsetWidth || 210;
+    const h = pin.offsetHeight || 76;
+    const x = parseFloat(pin.style.left) || 0;
+    const y = parseFloat(pin.style.top) || 0;
+    const c = center();
+    const d = Math.hypot((x + w/2) - c.x, (y + h/2) - c.y);
+    const inCenter = d <= (maxR() * lensRatio);
+    pin.classList.toggle('in-center', inCenter);
+    pin.classList.toggle('in-periphery', !inCenter);
+  }
+
+  function placeInCenter(pin){
+    const w = pin.offsetWidth || 220;
+    const h = pin.offsetHeight || 82;
+    pin.style.left = ((surface.clientWidth - w) / 2) + 'px';
+    pin.style.top = ((surface.clientHeight - h) / 2) + 'px';
+    classify(pin);
+  }
+
+  function bindDrag(pin){
+    pin.addEventListener('pointerdown', (e) => {
+      const rect = pin.getBoundingClientRect();
+      const surfRect = surface.getBoundingClientRect();
+      const ox = e.clientX - rect.left;
+      const oy = e.clientY - rect.top;
+      let dragging = false;
+      const sx = e.clientX;
+      const sy = e.clientY;
+
+      const onMove = (ev) => {
+        const dist = Math.hypot(ev.clientX - sx, ev.clientY - sy);
+        if (!dragging && dist < 3) return;
+        if (!dragging) {
+          dragging = true;
+          pin.classList.add('dragging');
+          surface.classList.add('dragging');
+          pin.setPointerCapture(e.pointerId);
+          tip.classList.remove('show');
+        }
+        const w = pin.offsetWidth || rect.width;
+        const h = pin.offsetHeight || rect.height;
+        const x = ev.clientX - surfRect.left - ox;
+        const y = ev.clientY - surfRect.top - oy;
+        pin.style.left = Math.max(8, Math.min(surface.clientWidth - w - 8, x)) + 'px';
+        pin.style.top = Math.max(8, Math.min(surface.clientHeight - h - 8, y)) + 'px';
+        classify(pin);
+      };
+
+      const onUp = (ev) => {
+        if (dragging) {
+          pin.classList.remove('dragging');
+          surface.classList.remove('dragging');
+          pin.releasePointerCapture(ev.pointerId);
+          classify(pin);
+        }
+        pin.removeEventListener('pointermove', onMove);
+        pin.removeEventListener('pointerup', onUp);
+        pin.removeEventListener('pointercancel', onUp);
+      };
+
+      pin.addEventListener('pointermove', onMove);
+      pin.addEventListener('pointerup', onUp);
+      pin.addEventListener('pointercancel', onUp);
+    });
+  }
+
+  function createFirstCard(title){
+    const pin = document.createElement('article');
+    pin.className = 'pin';
+    pin.innerHTML = `<b>${title}</b><p>Initial priority for this Orbit</p>`;
+    surface.appendChild(pin);
+    placeInCenter(pin);
+    bindDrag(pin);
+    return pin;
+  }
+
+  function run(){
+    const title = (input.value || '').trim();
+    if (!title) { input.focus(); return; }
+    panel.classList.add('hidden');
+    const pin = createFirstCard(title);
+    requestAnimationFrame(() => classify(pin));
+    setTimeout(() => tip.classList.add('show'), 180);
+    setTimeout(() => tip.classList.remove('show'), 3200);
+  }
+
+  addBtn.addEventListener('click', run);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+  input.focus();
+
+  window.addEventListener('resize', () => {
+    document.querySelectorAll('.pin').forEach(classify);
+  });
+})();
+</script>
+</body>
+</html>

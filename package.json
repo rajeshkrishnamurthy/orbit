@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "description": "Playwright UI tests for Orbit",
   "scripts": {
+    "dev:firsttime": "./scripts/dev-firsttime.sh",
+    "dev:normal": "./scripts/dev-normal.sh",
     "test:ui": "playwright test",
     "test:ui:headed": "playwright test --headed",
     "test:ui:debug": "playwright test --debug",

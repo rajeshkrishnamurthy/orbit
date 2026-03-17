@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Orbit — Post-splash first use</title>
+<style>
+:root{--bg:#0d1220;--bg2:#151c31;--line:#394773;--ink:#edf2ff;--muted:#9da9cd;--accent:#6f8cff}
+*{box-sizing:border-box} body{margin:0;font-family:Inter,system-ui;background:radial-gradient(circle at 50% -20%,#1f2744 0,var(--bg) 56%);color:var(--ink)}
+.frame{max-width:1280px;margin:20px auto;padding:0 14px}
+.surface{position:relative;height:760px;border:1px solid #2d3761;border-radius:20px;background:radial-gradient(circle at center,var(--bg2) 0,var(--bg) 60%);overflow:hidden}
+.orbit{position:absolute;border:1px dashed rgba(168,181,232,.25);border-radius:999px;opacity:.22;pointer-events:none}
+.o1{inset:305px 515px}.o2{inset:228px 414px}.o3{inset:138px 292px}.o4{inset:42px 154px}
+.core-halo{position:absolute;left:50%;top:50%;width:220px;height:220px;transform:translate(-50%,-50%);border-radius:999px;border:1px solid rgba(136,157,240,.5);box-shadow:0 0 0 14px rgba(111,140,255,.08);opacity:.9}
+.stage{position:absolute;inset:0;display:none}
+.stage.active{display:block}
+.center-wrap{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(560px,88%);text-align:center}
+.kicker{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#aeb8dc}
+h1{margin:8px 0 6px;font-size:34px;line-height:1.2}
+.sub{margin:0 0 14px;color:var(--muted)}
+.input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid #405089;background:rgba(14,20,38,.85);color:#fff;font-size:15px}
+.input::placeholder{color:#8ea0d8}
+.cta{margin-top:12px;border:none;border-radius:12px;padding:11px 16px;background:linear-gradient(180deg,#6d85e8,#4d66bf);color:#fff;font-weight:600;cursor:pointer}
+.examples{margin-top:12px;font-size:12px;color:#92a1ce}
+.examples span{display:inline-block;margin:0 4px;padding:3px 8px;border:1px solid rgba(255,255,255,.16);border-radius:999px}
+.card{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);min-width:230px;max-width:320px;background:#6f8cff;border:1px solid rgba(255,255,255,.24);border-radius:12px;padding:12px 14px;box-shadow:0 12px 24px rgba(0,0,0,.25)}
+.card b{display:block}
+.hint{position:absolute;left:50%;top:calc(50% + 96px);transform:translateX(-50%);background:rgba(10,14,26,.74);border:1px solid rgba(46,59,104,.8);border-radius:10px;padding:8px 10px;font-size:12px;color:#d8e2ff}
+.confirm{position:absolute;left:50%;top:calc(50% + 98px);transform:translateX(-50%);background:rgba(45,66,118,.84);border:1px solid rgba(149,173,255,.55);border-radius:10px;padding:8px 10px;font-size:12px}
+.note{position:absolute;right:12px;bottom:10px;font-size:11px;color:#8f9ec9}
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="surface">
+    <div class="orbit o1"></div><div class="orbit o2"></div><div class="orbit o3"></div><div class="orbit o4"></div>
+
+    <section class="stage active" id="s1">
+      <div class="core-halo"></div>
+      <div class="center-wrap">
+        <div class="kicker">First step</div>
+        <h1>Start with an active priority</h1>
+        <p class="sub">Something bigger than a single task</p>
+        <input class="input" placeholder="e.g., Close DBS commercial model"/>
+        <button class="cta">Add to Orbit</button>
+        <div class="examples">
+          <span>Equitas upgrade</span>
+          <span>Lasco closure</span>
+          <span>BOB Ease</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="stage" id="s2">
+      <div class="core-halo"></div>
+      <article class="card" style="left:50%;top:50%"><b>DBS commercial model</b><div style="font-size:12px;opacity:.9">Negotiation + closure this cycle</div></article>
+      <div class="hint">Drag it closer to the center if it matters now</div>
+    </section>
+
+    <section class="stage" id="s3">
+      <div class="core-halo"></div>
+      <article class="card" style="left:49%;top:47%"><b>DBS commercial model</b><div style="font-size:12px;opacity:.9">Negotiation + closure this cycle</div></article>
+      <div class="confirm">Closer to center = more active</div>
+    </section>
+
+    <div class="note">Prototype states: first input → first drag hint → brief confirmation</div>
+  </div>
+</div>
+</body>
+</html>
