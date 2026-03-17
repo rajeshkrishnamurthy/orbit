@@ -18,6 +18,23 @@ declare function setDragHalo(on: boolean): void;
 declare function createPin(item: HiddenItem, focusTitle: boolean, markSaved: boolean): HTMLElement;
 
 const pendingUnhide = new Map<string, PendingUnhide>();
+let hiddenDragPreview: HTMLDivElement | null = null;
+
+function clearHiddenDragPreview(): void {
+  if (!hiddenDragPreview) return;
+  hiddenDragPreview.remove();
+  hiddenDragPreview = null;
+}
+
+function showHiddenDragPreview(title: string, ev: DragEvent): void {
+  clearHiddenDragPreview();
+  const preview = document.createElement('div');
+  preview.className = 'hidden-drag-preview';
+  preview.textContent = title || 'Untitled';
+  document.body.appendChild(preview);
+  hiddenDragPreview = preview;
+  ev.dataTransfer?.setDragImage(preview, 16, 16);
+}
 
 function renderHiddenTrayItems(): void {
   hiddenTray.innerHTML = '';
@@ -32,13 +49,18 @@ function renderHiddenTrayItems(): void {
     t.textContent = it.title || 'Untitled';
     t.draggable = true;
     t.addEventListener('dragstart', (ev) => {
+      showHiddenDragPreview(it.title || 'Untitled', ev);
       ev.dataTransfer?.setData('text/orbit-hidden-id', it.id);
+    });
+    t.addEventListener('dragend', () => {
+      clearHiddenDragPreview();
     });
     hiddenTray.appendChild(t);
   });
 }
 
 function closeHiddenTray(): void {
+  clearHiddenDragPreview();
   hiddenTray.hidden = true;
   hiddenTray.innerHTML = '';
   trayOpen = false;
@@ -51,6 +73,7 @@ function syncHiddenTray(): void {
 }
 
 async function openHiddenTray(): Promise<void> {
+  trayOpen = true;
   hiddenTray.hidden = false;
   placeHiddenTray();
   hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
@@ -61,12 +84,12 @@ async function openHiddenTray(): Promise<void> {
       body: JSON.stringify({ contextId: currentContextId }),
     });
     const data = await res.json();
+    if (!trayOpen) return;
     hiddenItemsCache = (data.items || []).filter((it: HiddenItem) => !pendingUnhide.has(it.id));
     renderHiddenTrayItems();
-    trayOpen = true;
   } catch (_err) {
+    if (!trayOpen) return;
     hiddenTray.innerHTML = '<div class="hidden-tray-empty">Unable to load hidden cards</div>';
-    trayOpen = true;
   }
 }
 
@@ -113,6 +136,7 @@ function handleHiddenDrop(e: DragEvent): void {
   const id = e.dataTransfer?.getData('text/orbit-hidden-id');
   if (!id) return;
   e.preventDefault();
+  clearHiddenDragPreview();
   setDragHalo(false);
   const rect = surface.getBoundingClientRect();
   const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
@@ -128,3 +152,29 @@ function handleHiddenDrop(e: DragEvent): void {
   syncHiddenTray();
   void persistHiddenUnhide(id, x, y);
 }
+
+function shouldDismissHiddenTray(target: Element | null): boolean {
+  if (!trayOpen || !target) return false;
+  if (target.closest('.hidden-tray')) return false;
+  if (target.closest('#hidden-toggle')) return false;
+  return true;
+}
+
+window.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape') return;
+  if (ev.defaultPrevented) return;
+  if (!trayOpen) return;
+  closeHiddenTray();
+});
+
+document.addEventListener('pointerdown', (ev) => {
+  const target = ev.target instanceof Element ? ev.target : null;
+  if (!shouldDismissHiddenTray(target)) return;
+  if (target && surface.contains(target)) return;
+  closeHiddenTray();
+});
+
+surface.addEventListener('pointerdown', (ev) => {
+  const target = ev.target instanceof Element ? ev.target : null;
+  if (shouldDismissHiddenTray(target)) closeHiddenTray();
+});

@@ -19,6 +19,7 @@
   let trayOpen = false;
   let hiddenItemsCache = [];
   const pendingUnhide = new Map();
+  let hiddenDragPreview = null;
   const completionTransitions = new Map();
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
@@ -265,7 +266,24 @@
     });
   }
 
+  function clearHiddenDragPreview(){
+    if (!hiddenDragPreview) return;
+    hiddenDragPreview.remove();
+    hiddenDragPreview = null;
+  }
+
+  function showHiddenDragPreview(title, ev){
+    clearHiddenDragPreview();
+    const preview = document.createElement('div');
+    preview.className = 'hidden-drag-preview';
+    preview.textContent = title || 'Untitled';
+    document.body.appendChild(preview);
+    hiddenDragPreview = preview;
+    if (ev.dataTransfer) ev.dataTransfer.setDragImage(preview, 16, 16);
+  }
+
   function closeHiddenTray(){
+    clearHiddenDragPreview();
     hiddenTray.hidden = true;
     hiddenTray.innerHTML = '';
     trayOpen = false;
@@ -285,7 +303,11 @@
       t.textContent = it.title || 'Untitled';
       t.draggable = true;
       t.addEventListener('dragstart', (ev) => {
+        showHiddenDragPreview(it.title || 'Untitled', ev);
         ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
+      });
+      t.addEventListener('dragend', () => {
+        clearHiddenDragPreview();
       });
       hiddenTray.appendChild(t);
     });
@@ -297,18 +319,19 @@
   }
 
   async function openHiddenTray(){
+    trayOpen = true;
     hiddenTray.hidden = false;
     placeHiddenTray();
     hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
     try {
       const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
       const data = await res.json();
+      if (!trayOpen) return;
       hiddenItemsCache = (data.items || []).filter(it => !pendingUnhide.has(it.id));
       renderHiddenTrayItems();
-      trayOpen = true;
     } catch (e) {
+      if (!trayOpen) return;
       hiddenTray.innerHTML = '<div class="hidden-tray-empty">Unable to load hidden cards</div>';
-      trayOpen = true;
     }
   }
 
@@ -874,6 +897,7 @@
     const id = e.dataTransfer && e.dataTransfer.getData('text/orbit-hidden-id');
     if (!id) return;
     e.preventDefault();
+    clearHiddenDragPreview();
     setDragHalo(false);
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
@@ -917,8 +941,26 @@
     persist();
   });
 
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Escape') return;
+    if (ev.defaultPrevented) return;
+    if (!trayOpen) return;
+    closeHiddenTray();
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!trayOpen) return;
+    const target = e.target;
+    if (!(target instanceof Node)) return;
+    if (surface.contains(target)) return;
+    closeHiddenTray();
+  });
+
   surface.addEventListener('pointerdown', (e) => {
+    const outsideTrayClick = trayOpen && !e.target.closest('.hidden-tray') && !e.target.closest('#hidden-toggle');
+    if (outsideTrayClick) closeHiddenTray();
     if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray') || e.target.closest('.context-confirm')) return;
+    if (outsideTrayClick) return;
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
