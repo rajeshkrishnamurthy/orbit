@@ -18,6 +18,7 @@
   let undoState = null;
   let trayOpen = false;
   let hiddenItemsCache = [];
+  const pendingUnhide = new Map();
   const completionTransitions = new Map();
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
 
@@ -268,6 +269,31 @@
     hiddenTray.hidden = true;
     hiddenTray.innerHTML = '';
     trayOpen = false;
+    renderHiddenButton();
+  }
+
+  function renderHiddenTrayItems(){
+    hiddenTray.innerHTML = '';
+    if (hiddenItemsCache.length === 0) {
+      hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
+      return;
+    }
+    hiddenItemsCache.forEach(it => {
+      const t = document.createElement('div');
+      t.className = 'hidden-tray-item';
+      t.dataset.id = it.id;
+      t.textContent = it.title || 'Untitled';
+      t.draggable = true;
+      t.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
+      });
+      hiddenTray.appendChild(t);
+    });
+  }
+
+  function syncHiddenTray(){
+    if (!trayOpen) return;
+    renderHiddenTrayItems();
   }
 
   async function openHiddenTray(){
@@ -277,21 +303,8 @@
     try {
       const res = await fetch('/api/items/hidden', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({contextId: currentContextId})});
       const data = await res.json();
-      hiddenItemsCache = data.items || [];
-      hiddenTray.innerHTML = '';
-      if (hiddenItemsCache.length === 0) {
-        hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
-      }
-      hiddenItemsCache.forEach(it => {
-        const t = document.createElement('div');
-        t.className = 'hidden-tray-item';
-        t.textContent = it.title || 'Untitled';
-        t.draggable = true;
-        t.addEventListener('dragstart', (ev) => {
-          ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
-        });
-        hiddenTray.appendChild(t);
-      });
+      hiddenItemsCache = (data.items || []).filter(it => !pendingUnhide.has(it.id));
+      renderHiddenTrayItems();
       trayOpen = true;
     } catch (e) {
       hiddenTray.innerHTML = '<div class="hidden-tray-empty">Unable to load hidden cards</div>';
@@ -303,7 +316,7 @@
     const btn = document.getElementById('hidden-toggle');
     if (!btn) return;
     btn.textContent = `Hidden (${hiddenCount})`;
-    btn.hidden = hiddenCount <= 0;
+    btn.hidden = hiddenCount <= 0 && !trayOpen;
   }
 
   function renderLensButtons(){
@@ -857,22 +870,51 @@
   });
 
   surface.addEventListener('drop', async (e) => {
+    if (!trayOpen || mode !== 'focus') return;
     const id = e.dataTransfer && e.dataTransfer.getData('text/orbit-hidden-id');
     if (!id) return;
     e.preventDefault();
-    if (mode === 'focus') setDragHalo(false);
+    setDragHalo(false);
     const rect = surface.getBoundingClientRect();
     const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
-    const item = hiddenItemsCache.find(i => i.id === id);
-    if (!item) return;
-    await fetch('/api/items/unhide-at', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, contextId: currentContextId, x, y})});
-    item.x = x; item.y = y;
-    if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(item, false, true);
+    if (pendingUnhide.has(id)) return;
+    const itemIndex = hiddenItemsCache.findIndex(i => i.id === id);
+    if (itemIndex < 0) return;
+    const item = hiddenItemsCache[itemIndex];
+    pendingUnhide.set(id, {item, index: itemIndex, x, y});
     hiddenItemsCache = hiddenItemsCache.filter(i => i.id !== id);
     hiddenCount = Math.max(0, hiddenCount - 1);
     renderHiddenButton();
-    if (hiddenItemsCache.length === 0) closeHiddenTray();
+    syncHiddenTray();
+    const persist = async () => {
+      try {
+        const res = await fetch('/api/items/unhide-at', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, contextId: currentContextId, x, y})});
+        if (!res.ok) throw new Error('unhide failed');
+        const pending = pendingUnhide.get(id);
+        if (!pending) return;
+        pendingUnhide.delete(id);
+        pending.item.x = x;
+        pending.item.y = y;
+        if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(pending.item, false, true);
+      } catch (_err) {
+        const pending = pendingUnhide.get(id);
+        if (!pending) return;
+        pendingUnhide.delete(id);
+        if (!hiddenItemsCache.find(i => i.id === id)) {
+          if (Number.isInteger(pending.index) && pending.index >= 0 && pending.index <= hiddenItemsCache.length) {
+            hiddenItemsCache.splice(pending.index, 0, pending.item);
+          } else {
+            hiddenItemsCache.push(pending.item);
+          }
+          hiddenCount += 1;
+          renderHiddenButton();
+          syncHiddenTray();
+        }
+        showCanvasWarning('Couldn\u2019t unhide item. Please try again.');
+      }
+    };
+    persist();
   });
 
   surface.addEventListener('pointerdown', (e) => {

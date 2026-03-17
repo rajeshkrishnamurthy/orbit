@@ -1,6 +1,6 @@
 # Feature Spec — In-Card Hover Action Drawer (Desktop)
 
-- **Project root:** `/Users/rajeshk/.openclaw/workspace-sophie`
+- **Project root:** `/Users/rajeshk/.openclaw/projects/orbit`
 - **Date:** 2026-03-17
 - **Status:** Hardened for handoff
 
