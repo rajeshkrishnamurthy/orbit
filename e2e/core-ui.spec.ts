@@ -108,6 +108,13 @@ async function getHiddenCount(page: Page): Promise<number> {
   return match ? Number(match[1]) : 0;
 }
 
+async function openActionDrawer(pin: Locator): Promise<void> {
+  const host = pin.locator('.pin-action-host');
+  await expect(host).toBeVisible();
+  await host.hover();
+  await expect(pin.locator('.pin-action-drawer')).toBeVisible();
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#surface')).toBeVisible();
@@ -204,8 +211,8 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
 
   const initialCount = await getHiddenCount(page);
 
-  await created.hover();
-  await created.locator('.pin-hide').click({ force: true });
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
 
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount + 1);
@@ -222,18 +229,36 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
 });
 
+test('focus cards use top-right hover drawer with fixed action set', async ({ page }) => {
+  const created = await createCard(page, `drawer-${Date.now()}`, 1140, 260);
+  await expect(created.locator('.pin-action-affordance')).toBeVisible();
+  await expect(created.locator(':scope > .pin-hide')).toHaveCount(0);
+  await expect(created.locator(':scope > .pin-delete')).toHaveCount(0);
+  await expect(created.locator(':scope > .pin-complete')).toHaveCount(0);
+
+  await openActionDrawer(created);
+
+  const drawer = created.locator('.pin-action-drawer');
+  await expect(drawer.locator('button')).toHaveCount(3);
+  await expect(drawer.locator('.pin-hide')).toHaveCount(1);
+  await expect(drawer.locator('.pin-delete')).toHaveCount(1);
+  await expect(drawer.locator('.pin-complete')).toHaveCount(1);
+  await expect(created.locator('.pin-drawer-dim')).not.toHaveCSS('opacity', '0');
+  await expect(created.locator('.pin-slip')).toBeVisible();
+});
+
 test('complete shows acknowledgment, supports undo, and expires after 3s', async ({ page }) => {
   const title = `complete-${Date.now()}`;
   const created = await createCard(page, title, 1180, 240);
   const id = await created.getAttribute('data-id');
   expect(id).toBeTruthy();
 
-  const completeButton = created.locator('.pin-complete');
-  await created.hover();
+  await openActionDrawer(created);
+  const completeButton = created.locator('.pin-action-drawer .pin-complete');
   await expect(completeButton).toHaveText('✓');
   await expect(completeButton).toHaveAttribute('aria-label', 'Complete card');
   await expect(created.locator('.pin-slip')).toBeVisible();
-  await completeButton.click({ force: true });
+  await completeButton.click();
 
   const samePin = page.locator(`.pin[data-id="${id}"]`);
   await expect(samePin).toHaveAttribute('data-state', 'completed');
@@ -247,8 +272,8 @@ test('complete shows acknowledgment, supports undo, and expires after 3s', async
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveAttribute('data-state', 'active');
 
-  await samePin.hover();
-  await samePin.locator('.pin-complete').click({ force: true });
+  await openActionDrawer(samePin);
+  await samePin.locator('.pin-action-drawer .pin-complete').click();
   await expect(page.locator('.undo-toast')).toContainText('Completed');
   await page.waitForTimeout(3200);
 
@@ -262,8 +287,8 @@ test('delete in focus uses undo without confirmation modal', async ({ page }) =>
   const id = await created.getAttribute('data-id');
   expect(id).toBeTruthy();
 
-  await created.hover();
-  await created.locator('.pin-delete').click({ force: true });
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-delete').click();
 
   await expect(page.locator('.context-confirm')).toBeHidden();
   await expect(page.locator('.undo-toast')).toContainText('Deleted');

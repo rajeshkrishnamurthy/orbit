@@ -617,10 +617,17 @@
   }
 
   function bindPin(pin){
+    const drawerHost = pin.querySelector('.pin-action-host');
     const del = pin.querySelector('.pin-delete');
     const hide = pin.querySelector('.pin-hide');
     const slip = pin.querySelector('.pin-slip');
     const complete = pin.querySelector('.pin-complete');
+    if (drawerHost) {
+      drawerHost.addEventListener('pointerdown', ev => ev.stopPropagation());
+      drawerHost.addEventListener('click', ev => {
+        if (!ev.target.closest('button')) ev.stopPropagation();
+      });
+    }
     if (slip) {
       slip.addEventListener('pointerdown', ev => ev.stopPropagation());
       slip.addEventListener('click', ev => {
@@ -786,10 +793,10 @@
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
-    const hideBtn = mode === 'focus' ? '<button class=\"pin-hide\" aria-label=\"Hide card\" title=\"Hide\">–</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
-    const completeBtn = mode === 'focus' ? '<button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button>' : '';
-    pin.innerHTML = `${hideBtn}${enterBtn}${slipBtn}${completeBtn}<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button><label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
+    const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div>' : '';
+    const deleteBtn = mode === 'contexts' ? '<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button>' : '';
+    pin.innerHTML = `${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
     pin.dataset.persistedSubNote = item.subNote || ''; 
     surface.appendChild(pin);
