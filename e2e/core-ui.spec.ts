@@ -295,7 +295,7 @@ test('touch control stays explicit, toggles today state, and supports undo', asy
   await expect(created).toHaveAttribute('data-stale', 'true');
 });
 
-test('complete shows acknowledgment, supports undo, and expires after 3s', async ({ page }) => {
+test('complete shows acknowledgment, supports undo, and expires after 6s', async ({ page }) => {
   const title = `complete-${Date.now()}`;
   const created = await createCard(page, title, 1180, 240);
   const id = await created.getAttribute('data-id');
@@ -323,7 +323,7 @@ test('complete shows acknowledgment, supports undo, and expires after 3s', async
   await openActionDrawer(samePin);
   await samePin.locator('.pin-action-drawer .pin-complete').click();
   await expect(page.locator('.undo-toast')).toContainText('Completed');
-  await page.waitForTimeout(3200);
+  await page.waitForTimeout(6200);
 
   await expect(page.locator('.undo-toast')).toHaveCount(0);
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);

@@ -47,7 +47,7 @@
 .pin-action-host{position:absolute;top:4px;right:6px;width:104px;height:18px;z-index:7;cursor:default}
 .pin-action-affordance{position:absolute;right:0;top:0;background:rgba(0,0,0,.14);color:rgba(246,251,255,.76);font-size:11px;letter-spacing:-.12em;pointer-events:none;opacity:.9;transform:translateX(0);transition:opacity .12s ease, transform .16s ease;cursor:default}
 .pin-drawer-dim{position:absolute;right:0;top:0;width:104px;height:18px;border-radius:8px;background:rgba(8,12,24,.22);opacity:0;pointer-events:none;transition:opacity .16s ease;transition-delay:70ms;cursor:default}
-.pin-action-drawer{position:absolute;right:30px;top:0;width:78px;height:18px;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none;transform:translateX(14px);transition:opacity .14s ease, transform .16s ease;transition-delay:70ms;cursor:default}
+.pin-action-drawer{position:absolute;right:28px;top:0;width:78px;height:18px;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none;transform:translateX(10px);transition:opacity .14s ease, transform .16s ease;transition-delay:70ms;cursor:default}
 .pin-touch{position:absolute;right:6px;top:50%;transform:translateY(-50%);z-index:6}
 .pin-action-drawer .pin-hide,.pin-action-drawer .pin-delete,.pin-action-drawer .pin-complete{position:relative;top:auto;right:auto;opacity:1;pointer-events:auto;transform:none}
 .pin-action-host:hover .pin-action-drawer,.pin-action-host:focus-within .pin-action-drawer{opacity:1;pointer-events:auto;transform:translateX(0);transition-delay:0ms}

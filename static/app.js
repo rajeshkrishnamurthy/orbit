@@ -7,8 +7,7 @@
   const items = window.__ITEMS__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
-  const UNDO_WINDOW_MS = 3000;
-  const TOUCH_UNDO_WINDOW_MS = 6000;
+  const UNDO_WINDOW_MS = 6000;
   const DRAG_THRESHOLD_PX = 5;
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
@@ -656,7 +655,7 @@
       if (data && data.undone === false) return false;
       applyTouchResponse(pin, data);
       return true;
-    }, TOUCH_UNDO_WINDOW_MS);
+    });
   }
 
   async function touchPinImmediate(pin){
