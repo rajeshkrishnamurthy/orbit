@@ -569,6 +569,10 @@ func TestRevealAllAPIReturnsItemsAndClearsHiddenSet(t *testing.T) {
 			t.Fatalf("hide item %s: %v", id, err)
 		}
 	}
+	var hiddenBefore int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, ctxID).Scan(&hiddenBefore); err != nil {
+		t.Fatalf("hidden count before reveal-all: %v", err)
+	}
 
 	rr := postJSON(t, app.revealAllAPI, map[string]any{"contextId": ctxID})
 	if rr.Code != http.StatusOK {
