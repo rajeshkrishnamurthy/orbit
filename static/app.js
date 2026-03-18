@@ -8,6 +8,7 @@
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const UNDO_WINDOW_MS = 3000;
+  const TOUCH_UNDO_WINDOW_MS = 6000;
   const DRAG_THRESHOLD_PX = 5;
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
   let lens = 'all';
@@ -192,6 +193,45 @@
     pin.classList.toggle("slipping", on);
   }
 
+  function localDayStringJS(date = new Date()){
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function localDayOffsetJS(days){
+    const date = new Date();
+    date.setDate(date.getDate() - days);
+    return localDayStringJS(date);
+  }
+
+  function withinLocalDaysJS(day, days){
+    if (!day) return false;
+    return day >= localDayOffsetJS(days);
+  }
+
+  function syncTouchState(pin){
+    if (mode !== 'focus') return;
+    const touchedToday = pin.dataset.touchedToday === 'true';
+    const touchCount7d = Number(pin.dataset.touchCount7d || '0');
+    const lastTouchedDay = pin.dataset.lastTouchedDay || '';
+    const isCenterBand = pin.dataset.band === 'center';
+    const active = isCenterBand
+      ? (withinLocalDaysJS(lastTouchedDay, 2) || touchCount7d >= 3)
+      : (withinLocalDaysJS(lastTouchedDay, 4) || touchCount7d >= 2);
+    pin.dataset.active = active ? 'true' : 'false';
+    pin.dataset.stale = active ? 'false' : 'true';
+    const touch = pin.querySelector('.pin-touch');
+    if (touch) {
+      touch.dataset.touchedToday = touchedToday ? 'true' : 'false';
+      touch.textContent = touchedToday ? '●' : '◌';
+      touch.setAttribute('aria-label', touchedToday ? 'Touched today' : 'Touch card');
+      touch.title = touchedToday ? 'Touched today' : 'Touch card';
+      touch.setAttribute('aria-pressed', touchedToday ? 'true' : 'false');
+    }
+  }
+
   function setPinColor(pin, color){
     pin.style.background = color;
     pin.dataset.color = color;
@@ -202,6 +242,7 @@
     const delEl = pin.querySelector('.pin-delete');
     const hideEl = pin.querySelector('.pin-hide');
     const enterEl = pin.querySelector('.pin-enter');
+    const touchEl = pin.querySelector('.pin-touch');
     if (luminance > 0.62){
       titleEl.style.color = '#0f1b2d';
       noteEl.style.color = '#1f2d45';
@@ -212,6 +253,7 @@
     if (delEl) delEl.style.color = '#f5f8ff';
     if (hideEl) hideEl.style.color = '#f5f8ff';
     if (enterEl) enterEl.style.color = '#f5f8ff';
+    if (touchEl) touchEl.style.color = '#f5f8ff';
   }
 
   function applyDistanceStyle(pin){
@@ -252,12 +294,14 @@
       pin.style.removeProperty('--pin-bright');
       pin.style.removeProperty('--pin-alpha');
     }
+    pin.dataset.inCenter = isCenterBand ? 'true' : 'false';
     const title = pin.querySelector('.pin-title input');
     const note = pin.querySelector('.pin-note textarea');
     title.style.fontSize = `${titleSize.toFixed(2)}px`;
     title.style.fontWeight = String(titleWt);
     note.style.fontSize = `${bodySize.toFixed(2)}px`;
     note.style.fontWeight = '480';
+    syncTouchState(pin);
   }
 
   function refreshSwatches(){
@@ -527,7 +571,7 @@
     undoState = null;
   }
 
-  function showUndoToast(message, kind, id, onUndo){
+  function showUndoToast(message, kind, id, onUndo, durationMs = UNDO_WINDOW_MS){
     clearUndo();
     const el = document.createElement('div');
     el.className = 'undo-toast';
@@ -544,7 +588,7 @@
       el,
       timer: setTimeout(() => {
         clearUndo();
-      }, UNDO_WINDOW_MS)
+      }, durationMs)
     };
   }
   function showDeleteUndo(payload){
@@ -587,6 +631,59 @@
       return true;
     });
   }
+
+  function applyTouchResponse(pin, data){
+    if (!pin || !data) return;
+    if (typeof data.touchedToday === 'boolean') pin.dataset.touchedToday = data.touchedToday ? 'true' : 'false';
+    if (Number.isFinite(Number(data.touchCount7d))) pin.dataset.touchCount7d = String(Number(data.touchCount7d));
+    if (typeof data.lastTouchedDay === 'string') pin.dataset.lastTouchedDay = data.lastTouchedDay;
+    syncTouchState(pin);
+  }
+
+  function showTouchUndo(pin, payload){
+    showUndoToast('Touched', 'touch', payload.id, async () => {
+      const res = await fetch('/api/items/touch/undo', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: payload.id})
+      });
+      if (!res.ok) {
+        const message = await res.text();
+        showCanvasWarning(message || 'Unable to undo touch.');
+        return false;
+      }
+      const data = await res.json();
+      if (data && data.undone === false) return false;
+      applyTouchResponse(pin, data);
+      return true;
+    }, TOUCH_UNDO_WINDOW_MS);
+  }
+
+  async function touchPinImmediate(pin){
+    if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
+    if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
+    const payload = pinPayload(pin);
+    let res;
+    try {
+      res = await fetch('/api/items/touch', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: payload.id})
+      });
+    } catch (_err) {
+      showCanvasWarning('Unable to touch card. Please try again.');
+      return;
+    }
+    if (!res.ok) {
+      const message = await res.text();
+      showCanvasWarning(message || 'Unable to touch card.');
+      return;
+    }
+    const data = await res.json();
+    applyTouchResponse(pin, data);
+    if (data.touched) showTouchUndo(pin, payload);
+  }
+
   async function completePinImmediate(pin){
     if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
     if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
@@ -655,10 +752,16 @@
 
   function bindPin(pin){
     const drawerHost = pin.querySelector('.pin-action-host');
+    const rightEdge = pin.querySelector('.pin-edge--right');
     const del = pin.querySelector('.pin-delete');
     const hide = pin.querySelector('.pin-hide');
     const slip = pin.querySelector('.pin-slip');
     const complete = pin.querySelector('.pin-complete');
+    const touch = pin.querySelector('.pin-touch');
+    if (rightEdge) {
+      rightEdge.addEventListener('pointerdown', ev => ev.stopPropagation());
+      rightEdge.addEventListener('click', ev => ev.stopPropagation());
+    }
     if (drawerHost) {
       drawerHost.addEventListener('pointerdown', ev => ev.stopPropagation());
       drawerHost.addEventListener('click', ev => {
@@ -691,6 +794,14 @@
         ev.preventDefault();
         ev.stopPropagation();
         completePinImmediate(pin);
+      });
+    }
+    if (touch) {
+      touch.addEventListener('pointerdown', ev => ev.stopPropagation());
+      touch.addEventListener('click', ev => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        touchPinImmediate(pin);
       });
     }
     const enter = pin.querySelector('.pin-enter');
@@ -844,8 +955,15 @@
     const pin = document.createElement('article');
     pin.className = 'pin';
     pin.dataset.id = item.id;
+    pin.dataset.mode = mode;
     pin.dataset.state = item.completed ? 'completed' : 'active';
     pin.dataset.transitioning = 'false';
+    pin.dataset.touchedToday = item.touchedToday ? 'true' : 'false';
+    pin.dataset.touchCount7d = String(Number(item.touchCount7d || 0));
+    pin.dataset.lastTouchedDay = item.lastTouchedDay || '';
+    pin.dataset.active = item.active ? 'true' : 'false';
+    pin.dataset.stale = item.stale ? 'true' : 'false';
+    pin.dataset.inCenter = item.inCenter ? 'true' : 'false';
     if (markSaved) lensExempt.delete(item.id);
     else lensExempt.add(item.id);
     pin.dataset.saved = markSaved ? 'true' : 'false';
@@ -854,7 +972,7 @@
     const edgeTargets = '<span class="pin-edge pin-edge--top" aria-hidden="true"></span><span class="pin-edge pin-edge--right" aria-hidden="true"></span><span class="pin-edge pin-edge--bottom" aria-hidden="true"></span><span class="pin-edge pin-edge--left" aria-hidden="true"></span>';
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
-    const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div>' : '';
+    const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div><button class=\"pin-touch\" aria-pressed=\"false\" aria-label=\"Touch card\" title=\"Touch card\">◌</button>' : '';
     const deleteBtn = mode === 'contexts' ? '<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button>' : '';
     pin.innerHTML = `${edgeTargets}${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';

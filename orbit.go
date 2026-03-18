@@ -28,18 +28,23 @@ import (
 var embeddedAssets embed.FS
 
 type Item struct {
-	ID        string    `json:"id"`
-	ContextID string    `json:"contextId,omitempty"`
-	Title     string    `json:"title"`
-	SubNote   string    `json:"subNote"`
-	X         float64   `json:"x"`
-	Y         float64   `json:"y"`
-	Color     string    `json:"color"`
-	Hidden    bool      `json:"hidden,omitempty"`
-	Slipping  bool      `json:"slipping,omitempty"`
-	Completed bool      `json:"completed,omitempty"`
-	InCenter  bool      `json:"inCenter,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID             string    `json:"id"`
+	ContextID      string    `json:"contextId,omitempty"`
+	Title          string    `json:"title"`
+	SubNote        string    `json:"subNote"`
+	X              float64   `json:"x"`
+	Y              float64   `json:"y"`
+	Color          string    `json:"color"`
+	Hidden         bool      `json:"hidden,omitempty"`
+	Slipping       bool      `json:"slipping,omitempty"`
+	Completed      bool      `json:"completed,omitempty"`
+	InCenter       bool      `json:"inCenter,omitempty"`
+	Active         bool      `json:"active"`
+	Stale          bool      `json:"stale"`
+	TouchedToday   bool      `json:"touchedToday"`
+	TouchCount7d   int       `json:"touchCount7d"`
+	LastTouchedDay string    `json:"lastTouchedDay"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 type Context struct {
@@ -176,6 +181,13 @@ CREATE TABLE IF NOT EXISTS items (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS touch_facts (
+  card_id TEXT NOT NULL,
+  local_day TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(card_id, local_day),
+  FOREIGN KEY(card_id) REFERENCES items(id) ON DELETE CASCADE
 );`)
 	if err != nil {
 		return err
@@ -270,6 +282,76 @@ func (s *Store) setCompleted(id string, completed bool) error {
 	return err
 }
 
+type touchSummary struct {
+	lastTouchedDay string
+	touchCount7d   int
+	touchedToday   bool
+}
+
+func localDayString(t time.Time) string {
+	return t.In(time.Local).Format("2006-01-02")
+}
+
+func localDayOffset(days int) string {
+	return localDayString(time.Now().AddDate(0, 0, -days))
+}
+
+func withinLocalDays(day string, days int) bool {
+	if day == "" {
+		return false
+	}
+	return day >= localDayOffset(days)
+}
+
+func (s *Store) touchSummary(id string) (touchSummary, error) {
+	rows, err := s.db.Query(`SELECT local_day FROM touch_facts WHERE card_id=? ORDER BY local_day DESC`, id)
+	if err != nil {
+		return touchSummary{}, err
+	}
+	defer rows.Close()
+	out := touchSummary{}
+	today := localDayString(time.Now())
+	weekStart := localDayOffset(6)
+	for rows.Next() {
+		var day string
+		if err := rows.Scan(&day); err != nil {
+			return touchSummary{}, err
+		}
+		if out.lastTouchedDay == "" {
+			out.lastTouchedDay = day
+		}
+		if day == today {
+			out.touchedToday = true
+		}
+		if day >= weekStart {
+			out.touchCount7d++
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) applyTouchState(it *Item) error {
+	summary, err := s.touchSummary(it.ID)
+	if err != nil {
+		return err
+	}
+	it.TouchedToday = summary.touchedToday
+	it.TouchCount7d = summary.touchCount7d
+	it.LastTouchedDay = summary.lastTouchedDay
+	if it.Hidden {
+		it.Active = false
+		it.Stale = false
+		return nil
+	}
+	if it.InCenter {
+		it.Active = summary.touchedToday || withinLocalDays(summary.lastTouchedDay, 2) || summary.touchCount7d >= 3
+	} else {
+		it.Active = summary.touchedToday || withinLocalDays(summary.lastTouchedDay, 4) || summary.touchCount7d >= 2
+	}
+	it.Stale = !it.Active
+	return nil
+}
+
 func (s *Store) hide(id, contextID string) error {
 	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	return err
@@ -282,7 +364,7 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 }
 
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +373,7 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
@@ -299,7 +381,16 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].InCenter = classifyDesktopBand(out[i].X, out[i].Y)
+		if err := s.applyTouchState(&out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) unhideAt(id, contextID string, x, y float64) error {
@@ -308,7 +399,7 @@ func (s *Store) unhideAt(id, contextID string, x, y float64) error {
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -317,13 +408,17 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
+		it.Hidden = false
+		if err := s.applyTouchState(&it); err != nil {
+			return nil, err
+		}
 		out = append(out, it)
 	}
 	if err := rows.Err(); err != nil {
@@ -337,7 +432,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 }
 
 func (s *Store) snapshot(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,slipping,completed,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
 		return nil, err
 	}
@@ -346,16 +441,105 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	for rows.Next() {
 		var it Item
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Slipping, &it.Completed, &updated); err != nil {
+		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
+		if err := s.applyTouchState(&it); err != nil {
+			return nil, err
+		}
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) touchItemState(id string) (*Item, error) {
+	var it Item
+	var updated string
+	err := s.db.QueryRow(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated)
+	if err != nil {
+		return nil, err
+	}
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		it.UpdatedAt = t
+	}
+	it.InCenter = classifyDesktopBand(it.X, it.Y)
+	if err := s.applyTouchState(&it); err != nil {
+		return nil, err
+	}
+	return &it, nil
+}
+
+func (s *Store) touchCard(id string) (*Item, bool, error) {
+	now := time.Now().In(time.Local)
+	localDay := now.Format("2006-01-02")
+	createdAt := now.Format(time.RFC3339Nano)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	var existing int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing); err != nil {
+		return nil, false, err
+	}
+	if existing > 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
+		item, stateErr := s.touchItemState(id)
+		if stateErr != nil {
+			return nil, false, stateErr
+		}
+		return item, false, nil
+	}
+	if _, err := tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	item, err := s.touchItemState(id)
+	if err != nil {
+		return nil, false, err
+	}
+	return item, true, nil
+}
+
+func (s *Store) undoTouchCard(id string) (*Item, bool, error) {
+	now := time.Now().In(time.Local)
+	localDay := now.Format("2006-01-02")
+	var createdAt string
+	err := s.db.QueryRow(`SELECT created_at FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&createdAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			item, stateErr := s.touchItemState(id)
+			return item, false, stateErr
+		}
+		return nil, false, err
+	}
+	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return nil, false, err
+	}
+	if now.Sub(created) > 6*time.Second {
+		item, stateErr := s.touchItemState(id)
+		return item, false, stateErr
+	}
+	if _, err := s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay); err != nil {
+		return nil, false, err
+	}
+	item, err := s.touchItemState(id)
+	if err != nil {
+		return nil, false, err
+	}
+	return item, true, nil
 }
 
 func contextOrDefault(id string) string {
@@ -486,6 +670,8 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items", app.itemsAPI)
 	mux.HandleFunc("/api/items/delete", app.deleteItemAPI)
 	mux.HandleFunc("/api/items/complete", app.completeItemAPI)
+	mux.HandleFunc("/api/items/touch", app.touchItemAPI)
+	mux.HandleFunc("/api/items/touch/undo", app.undoTouchItemAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
 	mux.HandleFunc("/api/items/unhide-at", app.unhideAtAPI)
@@ -626,6 +812,97 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"ok":true}`))
+}
+
+type touchItemAPIResponse struct {
+	Ok             bool   `json:"ok"`
+	Touched        bool   `json:"touched"`
+	Undone         bool   `json:"undone"`
+	ID             string `json:"id"`
+	Active         bool   `json:"active"`
+	Stale          bool   `json:"stale"`
+	TouchedToday   bool   `json:"touchedToday"`
+	TouchCount7d   int    `json:"touchCount7d"`
+	LastTouchedDay string `json:"lastTouchedDay"`
+	InCenter       bool   `json:"inCenter"`
+}
+
+func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	item, touched, err := a.store.touchCard(in.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+		Ok:             true,
+		Touched:        touched,
+		ID:             item.ID,
+		Active:         item.Active,
+		Stale:          item.Stale,
+		TouchedToday:   item.TouchedToday,
+		TouchCount7d:   item.TouchCount7d,
+		LastTouchedDay: item.LastTouchedDay,
+		InCenter:       item.InCenter,
+	})
+}
+
+func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var in struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if in.ID == "" {
+		http.Error(w, "id required", http.StatusBadRequest)
+		return
+	}
+	item, undone, err := a.store.undoTouchCard(in.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+		Ok:             true,
+		Undone:         undone,
+		ID:             item.ID,
+		Active:         item.Active,
+		Stale:          item.Stale,
+		TouchedToday:   item.TouchedToday,
+		TouchCount7d:   item.TouchCount7d,
+		LastTouchedDay: item.LastTouchedDay,
+		InCenter:       item.InCenter,
+	})
 }
 
 func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {

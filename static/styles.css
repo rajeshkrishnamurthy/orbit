@@ -17,7 +17,8 @@
 .pin::after{content:"";position:absolute;inset:1px;border-radius:10px;pointer-events:none;border:1px solid rgba(255,255,255,.06)}
 .pin-edge{position:absolute;display:block;background:transparent;cursor:grab;z-index:1}
 .pin-edge--top{left:0;right:0;top:0;height:8px;border-radius:12px 12px 0 0}
-.pin-edge--right{top:0;right:0;bottom:0;width:8px;border-radius:0 12px 12px 0}
+.pin-edge--right{top:0;right:0;bottom:0;width:8px;border-radius:0 12px 12px 0;cursor:grab;z-index:1}
+.pin[data-mode="focus"] .pin-edge--right{width:18px;cursor:default;z-index:5}
 .pin-edge--bottom{left:0;right:0;bottom:0;height:8px;border-radius:0 0 12px 12px}
 .pin-edge--left{top:0;left:0;bottom:0;width:8px;border-radius:12px 0 0 12px}
 .pin.dragging{box-shadow:0 16px 30px rgba(8,12,24,.34),inset 0 1px 0 rgba(255,255,255,.18),inset 0 -1px 0 rgba(0,0,0,.14);cursor:grabbing}
@@ -35,27 +36,30 @@
 .pin input,.pin textarea{width:100%;border:none;background:transparent;outline:none;color:inherit;font:inherit;padding:0;cursor:inherit}
 .pin input:focus,.pin textarea:focus{cursor:text}
 .pin textarea{resize:none;overflow:hidden;min-height:1.25em;max-height:2.5em;line-height:1.25;white-space:pre-wrap}
-.pin-delete,.pin-hide,.pin-complete{width:18px;height:18px;padding:0;border:none;border-radius:999px;color:inherit;line-height:1;cursor:pointer;display:grid;place-items:center}
+.pin-delete,.pin-hide,.pin-complete,.pin-touch,.pin-action-affordance{width:18px;height:18px;padding:0;border:none;border-radius:999px;box-sizing:border-box;color:inherit;line-height:1;cursor:pointer;display:grid;place-items:center}
 .pin-delete,.pin-hide{background:rgba(0,0,0,.18);font-size:12px;font-weight:600}
 .pin-hide{font-size:11px;transform:translateY(-2px)}
 .pin-complete{background:rgba(12,17,31,.2);color:#f6fbff;font-size:11px;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.pin-touch{background:rgba(12,17,31,.18);color:rgba(236,241,255,.72);font-size:11px;font-weight:800;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);opacity:1;pointer-events:auto;transition:background .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease}
+.pin-touch[data-touched-today="true"]{background:rgba(110,140,255,.94);color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.16) inset,0 0 0 6px rgba(110,140,255,.10)}
 
 .pin-delete{position:absolute;top:4px;right:6px;opacity:0;pointer-events:none;transition:opacity .12s ease, background .12s ease}
-.pin-action-host{position:absolute;top:4px;right:6px;width:78px;height:18px;z-index:6}
-.pin-action-affordance{position:absolute;right:0;top:0;width:18px;height:18px;border-radius:999px;background:rgba(0,0,0,.14);color:rgba(246,251,255,.76);font-size:10px;line-height:18px;display:grid;place-items:center;letter-spacing:-.12em;pointer-events:none;opacity:.9;transform:translateX(0);transition:opacity .12s ease, transform .16s ease}
-.pin-drawer-dim{position:absolute;right:0;top:0;width:78px;height:18px;border-radius:8px;background:rgba(8,12,24,.22);opacity:0;pointer-events:none;transition:opacity .16s ease;transition-delay:70ms}
-.pin-action-drawer{position:absolute;right:0;top:0;width:78px;height:18px;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none;transform:translateX(8px);transition:opacity .14s ease, transform .16s ease;transition-delay:70ms}
+.pin-action-host{position:absolute;top:4px;right:6px;width:104px;height:18px;z-index:7;cursor:default}
+.pin-action-affordance{position:absolute;right:0;top:0;background:rgba(0,0,0,.14);color:rgba(246,251,255,.76);font-size:11px;letter-spacing:-.12em;pointer-events:none;opacity:.9;transform:translateX(0);transition:opacity .12s ease, transform .16s ease;cursor:default}
+.pin-drawer-dim{position:absolute;right:0;top:0;width:104px;height:18px;border-radius:8px;background:rgba(8,12,24,.22);opacity:0;pointer-events:none;transition:opacity .16s ease;transition-delay:70ms;cursor:default}
+.pin-action-drawer{position:absolute;right:30px;top:0;width:78px;height:18px;display:flex;align-items:center;justify-content:flex-end;gap:4px;opacity:0;pointer-events:none;transform:translateX(14px);transition:opacity .14s ease, transform .16s ease;transition-delay:70ms;cursor:default}
+.pin-touch{position:absolute;right:6px;top:50%;transform:translateY(-50%);z-index:6}
 .pin-action-drawer .pin-hide,.pin-action-drawer .pin-delete,.pin-action-drawer .pin-complete{position:relative;top:auto;right:auto;opacity:1;pointer-events:auto;transform:none}
 .pin-action-host:hover .pin-action-drawer,.pin-action-host:focus-within .pin-action-drawer{opacity:1;pointer-events:auto;transform:translateX(0);transition-delay:0ms}
 .pin-action-host:hover .pin-drawer-dim,.pin-action-host:focus-within .pin-drawer-dim{opacity:1;transition-delay:0ms}
-.pin-action-host:hover .pin-action-affordance,.pin-action-host:focus-within .pin-action-affordance{opacity:0;transform:translateX(4px)}
+.pin-action-host:hover .pin-action-affordance,.pin-action-host:focus-within .pin-action-affordance{opacity:.98;transform:none}
 
 .pin-enter{position:absolute;right:8px;bottom:8px;width:20px;height:20px;border:none;border-radius:999px;background:rgba(0,0,0,.2);color:inherit;font-size:12px;line-height:20px;display:grid;place-items:center;opacity:0;pointer-events:none;cursor:pointer;transition:opacity .12s ease, background .12s ease}
-.pin-slip{position:absolute;right:6px;bottom:4px;width:18px;height:18px;padding:0;border:none;border-radius:999px;background:rgba(12,17,31,.2);color:rgba(236,241,255,.72);font-size:10px;font-weight:700;line-height:1;display:grid;place-items:center;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);opacity:.72;pointer-events:auto;cursor:pointer;transition:opacity .12s ease, background .12s ease, color .12s ease, box-shadow .12s ease}
+.pin-slip{position:absolute;right:6px;bottom:4px;width:18px;height:18px;padding:0;border:none;border-radius:999px;background:rgba(12,17,31,.2);color:rgba(236,241,255,.72);font-size:10px;font-weight:700;line-height:1;display:grid;place-items:center;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);opacity:.72;pointer-events:auto;cursor:pointer;transition:opacity .12s ease, background .12s ease, color .12s ease, box-shadow .12s ease;z-index:6}
 .pin:hover > .pin-delete,.pin:focus-within > .pin-delete,.pin.selected > .pin-delete,.pin[data-saved="true"]:hover .pin-enter,.pin[data-saved="true"]:focus-within .pin-enter,.pin.selected[data-saved="true"] .pin-enter{opacity:.88;pointer-events:auto}
-.pin-delete:hover,.pin-hide:hover,.pin-enter:hover,.pin-slip:hover,.pin-complete:hover{background:rgba(0,0,0,.28)}
+.pin-delete:hover,.pin-hide:hover,.pin-enter:hover,.pin-slip:hover,.pin-complete:hover,.pin-touch:hover{background:rgba(0,0,0,.28)}
 .pin[data-saved="false"] .pin-complete{opacity:.5;pointer-events:none}
-.pin[data-state="completed"] .pin-complete,.pin[data-state="completed"] .pin-delete,.pin[data-state="completed"] .pin-hide,.pin[data-state="completed"] .pin-slip{opacity:0;pointer-events:none}
+.pin[data-state="completed"] .pin-complete,.pin[data-state="completed"] .pin-delete,.pin[data-state="completed"] .pin-hide,.pin[data-state="completed"] .pin-slip,.pin[data-state="completed"] .pin-touch{opacity:0;pointer-events:none}
 .pin.pin--complete-pop .pin-complete{opacity:1;transform:translateY(0) scale(1.18);animation:pin-complete-pop 180ms ease-out forwards}
 .pin.pin--complete-pulse{animation:pin-complete-pulse 260ms ease-out 1}
 .pin.pin--complete-jiggle{animation:pin-complete-jiggle 220ms ease-in-out 1}
