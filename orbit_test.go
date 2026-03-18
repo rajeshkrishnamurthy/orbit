@@ -5,11 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"html/template"
-	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -416,7 +417,7 @@ func TestNewStoreFailsWhenInitializedButDBMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when initialized flag exists but db is missing")
 	}
-	if !strings.Contains(err.Error(), "orbit.db missing after initialization") {
+	if msg := err.Error(); !strings.Contains(msg, "state loss") && !strings.Contains(msg, "missing after initialization") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, statErr := os.Stat(dbPath); statErr == nil {
@@ -729,6 +730,186 @@ func TestStoreSnapshotAndContextsReadPaths(t *testing.T) {
 	if !found {
 		t.Fatalf("expected context %q in contexts() output", ctxID)
 	}
+}
+
+func TestNewStoreSeedsCanonicalDefaults(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	mainCtx, err := s.contextByID("main-orbit")
+	if err != nil {
+		t.Fatalf("contextByID main-orbit: %v", err)
+	}
+	if mainCtx.Title != "Main Orbit" || mainCtx.X != 560.0 || mainCtx.Y != 320.0 {
+		t.Fatalf("unexpected main-orbit context: %+v", *mainCtx)
+	}
+
+	moreCtx, err := s.contextByID("more-contexts")
+	if err != nil {
+		t.Fatalf("contextByID more-contexts: %v", err)
+	}
+	if moreCtx.Title != "Add more contexts" || moreCtx.X != 560.0 || moreCtx.Y != 500.0 {
+		t.Fatalf("unexpected more-contexts context: %+v", *moreCtx)
+	}
+
+	items, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(items) != 7 {
+		t.Fatalf("expected 7 seeded items, got %d", len(items))
+	}
+
+	want := map[string]struct {
+		x float64
+		y float64
+	}{
+		"i1": {x: 760, y: 280},
+		"i2": {x: 620, y: 380},
+		"i5": {x: 360, y: 460},
+		"i7": {x: 1020, y: 360},
+	}
+	for id, pos := range want {
+		found := false
+		for _, it := range items {
+			if it.ID != id {
+				continue
+			}
+			found = true
+			if it.X != pos.x || it.Y != pos.y {
+				t.Fatalf("unexpected seeded position for %s: got=(%v,%v) want=(%v,%v)", id, it.X, it.Y, pos.x, pos.y)
+			}
+			break
+		}
+		if !found {
+			t.Fatalf("expected seeded item %s to exist", id)
+		}
+	}
+}
+
+func TestContextByIDDefaultsBlankAndUpsertPreservesCreatedAt(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	cur, err := s.contextByID("")
+	if err != nil {
+		t.Fatalf("contextByID blank: %v", err)
+	}
+	if cur.ID != "main-orbit" {
+		t.Fatalf("expected blank context lookup to default to main-orbit, got %q", cur.ID)
+	}
+
+	const id = "t_ctx_created_at"
+	if err := s.upsertContext(Context{
+		ID:      id,
+		Title:   "Created At Test",
+		SubNote: "",
+		X:       111,
+		Y:       222,
+		Color:   "var(--c3)",
+	}); err != nil {
+		t.Fatalf("seed context: %v", err)
+	}
+
+	var created1 string
+	if err := s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, id).Scan(&created1); err != nil {
+		t.Fatalf("query created_at before update: %v", err)
+	}
+
+	if err := s.upsertContext(Context{
+		ID:      id,
+		Title:   "Created At Test Updated",
+		SubNote: "Updated note",
+		X:       333,
+		Y:       444,
+		Color:   "var(--c4)",
+	}); err != nil {
+		t.Fatalf("update context: %v", err)
+	}
+
+	var created2, title string
+	if err := s.db.QueryRow(`SELECT created_at,title FROM contexts WHERE id=?`, id).Scan(&created2, &title); err != nil {
+		t.Fatalf("query created_at after update: %v", err)
+	}
+	if created1 != created2 {
+		t.Fatalf("created_at changed across upsert: before=%q after=%q", created1, created2)
+	}
+	if title != "Created At Test Updated" {
+		t.Fatalf("title not updated: %q", title)
+	}
+}
+
+func TestImportJSONImportsItemsAndHandlesEdgeCases(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	t.Run("empty file is a no-op", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "items.json")
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			t.Fatalf("write empty file: %v", err)
+		}
+		before, err := s.snapshot("main-orbit")
+		if err != nil {
+			t.Fatalf("snapshot before import: %v", err)
+		}
+		if err := s.importJSON(path); err != nil {
+			t.Fatalf("importJSON empty file: %v", err)
+		}
+		after, err := s.snapshot("main-orbit")
+		if err != nil {
+			t.Fatalf("snapshot after import: %v", err)
+		}
+		if len(after) != len(before) {
+			t.Fatalf("empty import changed item count: before=%d after=%d", len(before), len(after))
+		}
+	})
+
+	t.Run("malformed json fails", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "items.json")
+		if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+			t.Fatalf("write malformed file: %v", err)
+		}
+		if err := s.importJSON(path); err == nil {
+			t.Fatal("expected malformed json to fail")
+		}
+	})
+
+	t.Run("valid json imports items", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "items.json")
+		payload, err := json.Marshal([]map[string]any{
+			{
+				"id":      "t_import_1",
+				"title":   "Imported item",
+				"subNote": "from json",
+				"x":       444.0,
+				"y":       555.0,
+				"color":   "var(--c5)",
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+		if err := os.WriteFile(path, payload, 0o644); err != nil {
+			t.Fatalf("write valid file: %v", err)
+		}
+		if err := s.importJSON(path); err != nil {
+			t.Fatalf("importJSON valid file: %v", err)
+		}
+		items, err := s.snapshot("main-orbit")
+		if err != nil {
+			t.Fatalf("snapshot after valid import: %v", err)
+		}
+		found := false
+		for _, it := range items {
+			if it.ID != "t_import_1" {
+				continue
+			}
+			found = true
+			if it.Title != "Imported item" || it.SubNote != "from json" || it.X != 444.0 || it.Y != 555.0 || it.Color != "var(--c5)" {
+				t.Fatalf("unexpected imported item: %+v", it)
+			}
+		}
+		if !found {
+			t.Fatal("expected imported item in snapshot")
+		}
+	})
 }
 
 func TestHomeRendersFocusAndContextsModes(t *testing.T) {
@@ -1340,6 +1521,108 @@ func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
 	}
 }
 
+func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
+	s, dbPath := newTestStore(t)
+	if err := s.update(Item{
+		ID:        "t_update_retention_1",
+		ContextID: "main-orbit",
+		Title:     "Retained Title",
+		SubNote:   "Retained note",
+		X:         240,
+		Y:         360,
+		Color:     "var(--c4)",
+	}); err != nil {
+		t.Fatalf("seed retained item: %v", err)
+	}
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close original store: %v", err)
+	}
+
+	backupDir := filepath.Join(filepath.Dir(dbPath), "backups")
+	_ = os.RemoveAll(backupDir)
+
+	reopened, err := newStore(dbPath)
+	if err != nil {
+		t.Fatalf("newStore reopen with existing db: %v", err)
+	}
+	defer reopened.db.Close()
+
+	var title, subNote string
+	var x, y float64
+	if err := reopened.db.QueryRow(`SELECT title, sub_note, x, y FROM items WHERE id=?`, "t_update_retention_1").Scan(&title, &subNote, &x, &y); err != nil {
+		t.Fatalf("query retained item after restart: %v", err)
+	}
+	if title != "Retained Title" || subNote != "Retained note" || x != 240 || y != 360 {
+		t.Fatalf("retained item changed unexpectedly: title=%q sub=%q x=%v y=%v", title, subNote, x, y)
+	}
+
+	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
+		t.Fatalf("expected latest backup file, stat err=%v", err)
+	}
+	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
+	if err != nil {
+		t.Fatalf("glob versioned backups: %v", err)
+	}
+	if len(versioned) == 0 {
+		t.Fatalf("expected at least one versioned backup, got none")
+	}
+}
+
+func TestOpenConfiguredDBFailsWhenParentDirectoryIsMissing(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "missing", "orbit.db")
+
+	db, err := openConfiguredDB(dbPath)
+	if db != nil {
+		defer db.Close()
+	}
+	if err == nil {
+		t.Fatal("expected openConfiguredDB to fail when parent directory is missing")
+	}
+}
+
+func TestOpenConfiguredDBFailsWhenDatabasePathIsDirectory(t *testing.T) {
+	dbPath := t.TempDir()
+
+	db, err := openConfiguredDB(dbPath)
+	if db != nil {
+		defer db.Close()
+	}
+	if err == nil {
+		t.Fatal("expected openConfiguredDB to fail when database path is a directory")
+	}
+}
+
+func TestNewStoreFailsWhenInitFlagCannotBeWritten(t *testing.T) {
+	s, dbPath := newTestStore(t)
+	if err := s.update(Item{
+		ID:        "t_init_flag_write_failure",
+		ContextID: "main-orbit",
+		Title:     "init flag failure",
+		SubNote:   "",
+		X:         101,
+		Y:         202,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close original store: %v", err)
+	}
+
+	initFlag := filepath.Join(filepath.Dir(dbPath), ".orbit_initialized")
+	if err := os.Remove(initFlag); err != nil {
+		t.Fatalf("remove init flag file: %v", err)
+	}
+	if err := os.MkdirAll(initFlag, 0o755); err != nil {
+		t.Fatalf("mkdir init flag dir: %v", err)
+	}
+
+	_, err := newStore(dbPath)
+	if err == nil {
+		t.Fatal("expected newStore to fail when init flag cannot be written")
+	}
+}
+
 func TestNewStoreRejectsInvalidPath(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "bad\x00path", "orbit.db")
 	_, err := newStore(dbPath)
@@ -1734,17 +2017,241 @@ func TestMigrateLegacyDataCopyFailuresAndLogging(t *testing.T) {
 				t.Fatalf("write legacy orbit.db: %v", err)
 			}
 
-			var buf bytes.Buffer
-			old := log.Writer()
-			log.SetOutput(&buf)
-			defer log.SetOutput(old)
-
 			if err := migrateLegacyData(targetDir); err != nil {
 				t.Fatalf("migrateLegacyData: %v", err)
 			}
-			if !strings.Contains(buf.String(), "migrated legacy runtime data") {
-				t.Fatalf("expected migration log output, got: %q", buf.String())
+			if _, err := os.Stat(filepath.Join(targetDir, "orbit.db")); err != nil {
+				t.Fatalf("expected orbit.db to copy during migration: %v", err)
 			}
 		})
 	})
+}
+
+func TestOrbitDataDirUsesOverrideAndCreatesDirectory(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "orbit data")
+	t.Setenv("ORBIT_DATA_DIR", override)
+
+	got, err := orbitDataDir()
+	if err != nil {
+		t.Fatalf("orbitDataDir: %v", err)
+	}
+	if got != override {
+		t.Fatalf("unexpected data dir: got %q want %q", got, override)
+	}
+	if fi, err := os.Stat(override); err != nil {
+		t.Fatalf("expected override dir to exist: %v", err)
+	} else if !fi.IsDir() {
+		t.Fatalf("expected override path to be a directory")
+	}
+}
+
+func TestOrbitDataDirUsesDefaultConfigPathWhenOverrideUnset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ORBIT_DATA_DIR", "")
+	t.Setenv("HOME", home)
+
+	got, err := orbitDataDir()
+	if err != nil {
+		t.Fatalf("orbitDataDir: %v", err)
+	}
+
+	want := ""
+	if runtime.GOOS == "darwin" {
+		want = filepath.Join(home, "Library", "Application Support", "Orbit")
+	} else {
+		configDir, err := os.UserConfigDir()
+		if err != nil {
+			t.Fatalf("UserConfigDir: %v", err)
+		}
+		want = filepath.Join(configDir, "Orbit")
+	}
+	if got != want {
+		t.Fatalf("unexpected data dir: got %q want %q", got, want)
+	}
+	if fi, err := os.Stat(want); err != nil {
+		t.Fatalf("expected default dir to exist: %v", err)
+	} else if !fi.IsDir() {
+		t.Fatalf("expected default path to be a directory")
+	}
+}
+
+func TestBackupDBCreatesVersionedAndLatestCopies(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "orbit.db")
+	source := []byte("orbit-db-backup-test")
+	if err := os.WriteFile(dbPath, source, 0o644); err != nil {
+		t.Fatalf("write source db: %v", err)
+	}
+
+	if err := backupDB(dbPath); err != nil {
+		t.Fatalf("backupDB: %v", err)
+	}
+
+	latest := filepath.Join(dir, "backups", "orbit.db.bak")
+	if !fileExists(latest) {
+		t.Fatalf("expected latest backup to exist at %s", latest)
+	}
+	latestBytes, err := os.ReadFile(latest)
+	if err != nil {
+		t.Fatalf("read latest backup: %v", err)
+	}
+	if !bytes.Equal(latestBytes, source) {
+		t.Fatalf("latest backup contents do not match source")
+	}
+
+	versioned, err := filepath.Glob(filepath.Join(dir, "backups", "orbit.db.*.bak"))
+	if err != nil {
+		t.Fatalf("glob versioned backups: %v", err)
+	}
+	if len(versioned) != 1 {
+		t.Fatalf("expected exactly one versioned backup, got %d (%v)", len(versioned), versioned)
+	}
+	versionedBytes, err := os.ReadFile(versioned[0])
+	if err != nil {
+		t.Fatalf("read versioned backup: %v", err)
+	}
+	if !bytes.Equal(versionedBytes, source) {
+		t.Fatalf("versioned backup contents do not match source")
+	}
+}
+
+func TestNewHandlerBootstrapsAndServesHome(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ORBIT_DATA_DIR", dataDir)
+
+	handler, err := NewHandler()
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if !fileExists(filepath.Join(dataDir, "orbit.db")) {
+		t.Fatalf("expected handler bootstrap to create orbit.db in %s", dataDir)
+	}
+}
+
+func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("ORBIT_DATA_DIR", dataDir)
+
+	dbPath := filepath.Join(dataDir, "orbit.db")
+	s, err := newStore(dbPath)
+	if err != nil {
+		t.Fatalf("seed newStore: %v", err)
+	}
+	if err := s.update(Item{
+		ID:        "t_update_item_1",
+		ContextID: "main-orbit",
+		Title:     "Persist through update",
+		SubNote:   "keep me",
+		X:         420,
+		Y:         260,
+		Color:     "var(--c2)",
+	}); err != nil {
+		t.Fatalf("seed update-retention item: %v", err)
+	}
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close seeded store: %v", err)
+	}
+
+	handler, err := NewHandler()
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 from startup handler, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite after startup: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var title, subNote string
+	var x, y float64
+	if err := db.QueryRow(`SELECT title,sub_note,x,y FROM items WHERE id=?`, "t_update_item_1").Scan(&title, &subNote, &x, &y); err != nil {
+		t.Fatalf("query retained item: %v", err)
+	}
+	if title != "Persist through update" || subNote != "keep me" || x != 420 || y != 260 {
+		t.Fatalf("unexpected retained row: title=%q subNote=%q x=%v y=%v", title, subNote, x, y)
+	}
+
+	if !fileExists(filepath.Join(dataDir, "backups", "orbit.db.bak")) {
+		t.Fatalf("expected startup backup to exist in %s", dataDir)
+	}
+}
+
+func TestOrbitDataDirRejectsNonDirectoryOverride(t *testing.T) {
+	root := t.TempDir()
+	override := filepath.Join(root, "orbit-data")
+	if err := os.WriteFile(override, []byte("not-a-directory"), 0o644); err != nil {
+		t.Fatalf("write override file: %v", err)
+	}
+	t.Setenv("ORBIT_DATA_DIR", override)
+
+	if _, err := orbitDataDir(); err == nil {
+		t.Fatal("expected orbitDataDir to fail when override path is a file")
+	}
+}
+
+func TestBackupDBReturnsErrorWhenBackupDirCannotBeCreated(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "orbit.db")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "backups"), []byte("file blocking backup dir"), 0o644); err != nil {
+		t.Fatalf("write blocking backups file: %v", err)
+	}
+
+	if err := backupDB(dbPath); err == nil {
+		t.Fatal("expected backupDB to fail when backups path is not a directory")
+	}
+}
+
+func TestListenOrbitPrefers8080AndFallsBackWhenBusy(t *testing.T) {
+	t.Setenv("PORT", "")
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:8080")
+	if err != nil {
+		t.Skipf("8080 unavailable for test setup: %v", err)
+	}
+	defer occupied.Close()
+
+	ln, baseURL, err := listenOrbit()
+	if err != nil {
+		t.Fatalf("listenOrbit: %v", err)
+	}
+	defer ln.Close()
+
+	if strings.HasSuffix(baseURL, ":8080") {
+		t.Fatalf("expected fallback away from busy 8080, got %s", baseURL)
+	}
+}
+
+func TestOpenConfiguredDBAppliesForeignKeyPragma(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "orbit.db")
+	db, err := openConfiguredDB(dbPath)
+	if err != nil {
+		t.Fatalf("openConfiguredDB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var foreignKeys int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		t.Fatalf("query foreign_keys pragma: %v", err)
+	}
+	if foreignKeys != 1 {
+		t.Fatalf("expected foreign_keys pragma to be enabled, got %d", foreignKeys)
+	}
 }

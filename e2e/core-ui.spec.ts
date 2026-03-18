@@ -247,6 +247,26 @@ test('focus cards use top-right hover drawer with fixed action set', async ({ pa
   await expect(created.locator('.pin-slip')).toBeVisible();
 });
 
+test('touch control stays explicit, toggles today state, and supports undo', async ({ page }) => {
+  const created = await createCard(page, `touch-${Date.now()}`, 1140, 260);
+  await openActionDrawer(created);
+
+  const touch = created.locator('.pin-touch');
+  await expect(touch).toBeVisible();
+  await expect(touch).toHaveAttribute('data-touched-today', 'false');
+
+  await created.hover();
+  await expect(touch).toHaveAttribute('data-touched-today', 'false');
+
+  await touch.click();
+  await expect(page.locator('.undo-toast')).toContainText('Touched');
+  await expect(touch).toHaveAttribute('data-touched-today', 'true');
+
+  await page.locator('.undo-btn').click();
+  await expect(page.locator('.undo-toast')).toHaveCount(0);
+  await expect(touch).toHaveAttribute('data-touched-today', 'false');
+});
+
 test('complete shows acknowledgment, supports undo, and expires after 3s', async ({ page }) => {
   const title = `complete-${Date.now()}`;
   const created = await createCard(page, title, 1180, 240);
