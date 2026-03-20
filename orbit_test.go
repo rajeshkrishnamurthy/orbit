@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var chdirMu sync.Mutex
@@ -510,6 +511,10 @@ func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed item: %v", err)
 	}
+	createdAt := time.Now().AddDate(0, 0, -8).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE items SET created_at=? WHERE id=?`, createdAt, "t_hide_item_2"); err != nil {
+		t.Fatalf("age item before hide: %v", err)
+	}
 	if err := s.hide("t_hide_item_2", ctxID); err != nil {
 		t.Fatalf("hide item before unhide-at: %v", err)
 	}
@@ -523,6 +528,20 @@ func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		Ok          bool `json:"ok"`
+		HiddenCount int  `json:"hiddenCount"`
+		Item        Item `json:"item"`
+	}](t, rr)
+	if !resp.Ok {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if !resp.Item.Stale || resp.Item.Hidden || resp.Item.Active {
+		t.Fatalf("expected restored item to be recomputed stale after unhide, got %#v", resp.Item)
+	}
+	if resp.Item.X != targetX || resp.Item.Y != targetY {
+		t.Fatalf("unexpected item coordinates in response: got (%v,%v), want (%v,%v)", resp.Item.X, resp.Item.Y, targetX, targetY)
 	}
 
 	var hidden int
@@ -1042,8 +1061,21 @@ func TestAPIResponsesUseJSONContentTypeAndExpectedBodies(t *testing.T) {
 			"color":     "var(--c3)",
 		})
 		assertJSONResponse(t, rr, http.StatusOK)
-		if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
-			t.Fatalf("unexpected body: %q", got)
+		var body struct {
+			Ok           bool   `json:"ok"`
+			ID           string `json:"id"`
+			Active       bool   `json:"active"`
+			Stale        bool   `json:"stale"`
+			TouchedToday bool   `json:"touchedToday"`
+			TouchCount7d int    `json:"touchCount7d"`
+			LastTouchedDay string `json:"lastTouchedDay"`
+			InCenter     bool   `json:"inCenter"`
+		}
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode itemsAPI body: %v", err)
+		}
+		if !body.Ok || body.ID != "t_api_resp_item_1" || !body.Active || body.Stale || body.TouchedToday || body.TouchCount7d != 0 || body.LastTouchedDay != "" || body.InCenter {
+			t.Fatalf("unexpected body: %#v", body)
 		}
 	})
 

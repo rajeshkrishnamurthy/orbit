@@ -40,6 +40,14 @@ func insertTouchFact(t *testing.T, s *Store, cardID string, dayOffset int, creat
 	}
 }
 
+func ageItemCreatedAt(t *testing.T, s *Store, cardID string, daysAgo int) {
+	t.Helper()
+	createdAt := time.Now().AddDate(0, 0, -daysAgo).In(time.Local).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE items SET created_at=? WHERE id=?`, createdAt, cardID); err != nil {
+		t.Fatalf("age created_at for %s by %d days: %v", cardID, daysAgo, err)
+	}
+}
+
 func touchFactCount(t *testing.T, s *Store, cardID string) int {
 	t.Helper()
 	var count int
@@ -79,6 +87,49 @@ func TestTouchFactsPersistPerLocalDayAndUndoHonorsWindow(t *testing.T) {
 	assertTouchLateUndoNoop(t, s, app, "touch-persist-3", "late undo", 900, 380, "var(--c3)")
 }
 
+func TestTouchSummaryReturnsMostRecentLocalDay(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	if err := s.update(Item{
+		ID:        "touch-summary-1",
+		ContextID: "main-orbit",
+		Title:     "summary",
+		X:         1080,
+		Y:         320,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	insertTouchFact(t, s, "touch-summary-1", 5, time.Now())
+	insertTouchFact(t, s, "touch-summary-1", 2, time.Now())
+	insertTouchFact(t, s, "touch-summary-1", 0, time.Now())
+
+	summary, err := s.touchSummary("touch-summary-1")
+	if err != nil {
+		t.Fatalf("touchSummary: %v", err)
+	}
+	if summary.lastTouchedDay != localDayOffset(0) {
+		t.Fatalf("expected most recent local day %q, got %q", localDayOffset(0), summary.lastTouchedDay)
+	}
+	if summary.touchCount7d != 3 {
+		t.Fatalf("expected 7d count 3, got %d", summary.touchCount7d)
+	}
+	if !summary.touchedToday {
+		t.Fatalf("expected touchedToday to be true: %#v", summary)
+	}
+}
+
+func TestTouchSummaryReturnsErrorWhenTouchFactQueryFails(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	if _, err := s.touchSummary("touch-summary-error"); err == nil {
+		t.Fatal("expected touchSummary to return an error when the query fails")
+	}
+}
+
 func TestCardMutationsDoNotCreateImplicitTouchFacts(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -93,6 +144,14 @@ func TestCardMutationsDoNotCreateImplicitTouchFacts(t *testing.T) {
 		"color":     "var(--c4)",
 	})
 	assertJSONResponse(t, rr, http.StatusOK)
+	items, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot after create: %v", err)
+	}
+	view := findTouchView(t, mustCastTouchViews(t, items), "touch-implicit-1")
+	if !view.Active || view.Stale || view.TouchedToday || view.TouchCount7d != 0 || view.LastTouchedDay != "" {
+		t.Fatalf("new card should be active immediately without touch facts: %#v", view)
+	}
 	if got := touchFactCount(t, s, "touch-implicit-1"); got != 0 {
 		t.Fatalf("card creation created touch facts unexpectedly: %d", got)
 	}
@@ -124,12 +183,28 @@ func TestCardMutationsDoNotCreateImplicitTouchFacts(t *testing.T) {
 	}
 }
 
-func TestTouchDerivationUsesPlacementAndRecentTouchContinuity(t *testing.T) {
+func TestTouchDerivationUsesCreationAnchorAndTouchContinuity(t *testing.T) {
 	s, _ := newTestStore(t)
-	assertTouchDerivationCase(t, s, "touch-center-recent", "center recent", 620, 300, "var(--c1)", []int{2}, true, false, 1)
-	assertTouchDerivationCase(t, s, "touch-center-stale", "center stale", 620, 300, "var(--c2)", []int{3}, false, true, 1)
-	assertTouchDerivationCase(t, s, "touch-periphery-recent", "periphery recent", 1080, 320, "var(--c3)", []int{4}, true, false, 1)
-	assertTouchDerivationCase(t, s, "touch-periphery-count", "periphery count", 1080, 320, "var(--c4)", []int{5, 6}, true, false, 2)
+	assertTouchDerivationCase(t, s, "touch-center-recent", "center recent", 620, 300, "var(--c1)", 0, []int{2}, true, false, 1)
+	assertTouchDerivationCase(t, s, "touch-center-stale", "center stale", 620, 300, "var(--c2)", 5, []int{3}, false, true, 1)
+	assertTouchDerivationCase(t, s, "touch-periphery-recent", "periphery recent", 1080, 320, "var(--c3)", 0, []int{4}, true, false, 1)
+	assertTouchDerivationCase(t, s, "touch-periphery-count", "periphery count", 1080, 320, "var(--c4)", 0, []int{5, 6}, true, false, 2)
+}
+
+func TestTouchDerivationPinsThresholdBoundaries(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	t.Run("center activates on three touches even when none are recent", func(t *testing.T) {
+		assertTouchDerivationCase(t, s, "touch-center-count", "center count", 620, 300, "var(--c5)", 8, []int{3, 4, 5}, true, false, 3)
+	})
+
+	t.Run("center excludes day-seven touch from seven-day count", func(t *testing.T) {
+		assertTouchDerivationCase(t, s, "touch-center-seven-day-boundary", "center seven day boundary", 620, 300, "var(--c1)", 8, []int{5, 6, 7}, false, true, 2)
+	})
+
+	t.Run("periphery stays stale once the four-day window is exceeded", func(t *testing.T) {
+		assertTouchDerivationCase(t, s, "touch-periphery-boundary", "periphery boundary", 1080, 320, "var(--c2)", 8, []int{5}, false, true, 1)
+	})
 }
 
 func TestHiddenCardsAreExcludedFromActiveStaleSemantics(t *testing.T) {
@@ -179,6 +254,87 @@ func TestHiddenCardsAreExcludedFromActiveStaleSemantics(t *testing.T) {
 	view := findTouchView(t, mustCastTouchViews(t, items), "touch-hidden-1")
 	if !view.Active || view.Stale {
 		t.Fatalf("unhidden item should re-enter active/stale semantics using preserved touches: %#v", view)
+	}
+}
+
+func TestUndoTouchOnUntouchedExistingItemIsNoOp(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	if err := s.update(Item{
+		ID:        "touch-undo-noop",
+		ContextID: "main-orbit",
+		Title:     "untouched",
+		SubNote:   "",
+		X:         1080,
+		Y:         320,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	rr := postJSON(t, app.undoTouchItemAPI, map[string]any{"id": "touch-undo-noop"})
+	resp := mustDecodeTouchResponse(t, rr)
+	if resp.Undone {
+		t.Fatalf("expected untouched item undo to be a no-op: %#v", resp)
+	}
+	if resp.TouchCount7d != 0 || resp.LastTouchedDay != "" || resp.TouchedToday {
+		t.Fatalf("untouched item should not gain touch metadata: %#v", resp)
+	}
+	if got := touchFactCount(t, s, "touch-undo-noop"); got != 0 {
+		t.Fatalf("untouched item undo should not create touch facts, got %d", got)
+	}
+}
+
+func TestHiddenTouchCardsPreserveLastTouchedDayThroughUnhide(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	if err := s.update(Item{
+		ID:        "touch-hidden-preserve",
+		ContextID: "main-orbit",
+		Title:     "hidden preserve",
+		X:         1080,
+		Y:         320,
+		Color:     "var(--c2)",
+	}); err != nil {
+		t.Fatalf("seed hidden item: %v", err)
+	}
+	insertTouchFact(t, s, "touch-hidden-preserve", 2, time.Now())
+	insertTouchFact(t, s, "touch-hidden-preserve", 0, time.Now())
+
+	hideRR := postJSON(t, app.hideItemAPI, map[string]any{"id": "touch-hidden-preserve", "contextId": "main-orbit"})
+	assertJSONResponse(t, hideRR, http.StatusOK)
+
+	hiddenRR := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": "main-orbit"})
+	assertJSONResponse(t, hiddenRR, http.StatusOK)
+	var hiddenPayload struct {
+		Items []touchCardView `json:"items"`
+	}
+	if err := json.Unmarshal(hiddenRR.Body.Bytes(), &hiddenPayload); err != nil {
+		t.Fatalf("decode hidden items: %v", err)
+	}
+	hiddenView := findTouchView(t, hiddenPayload.Items, "touch-hidden-preserve")
+	if hiddenView.LastTouchedDay != localDayOffset(0) {
+		t.Fatalf("hidden item lost lastTouchedDay: %#v", hiddenView)
+	}
+	if hiddenView.TouchCount7d != 2 {
+		t.Fatalf("hidden item lost touchCount7d: %#v", hiddenView)
+	}
+
+	unhideRR := postJSON(t, app.unhideAtAPI, map[string]any{"id": "touch-hidden-preserve", "contextId": "main-orbit", "x": 1080.0, "y": 320.0})
+	assertJSONResponse(t, unhideRR, http.StatusOK)
+
+	items, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot after unhide: %v", err)
+	}
+	view := findTouchView(t, mustCastTouchViews(t, items), "touch-hidden-preserve")
+	if view.LastTouchedDay != localDayOffset(0) {
+		t.Fatalf("unhidden item lost lastTouchedDay: %#v", view)
+	}
+	if view.TouchCount7d != 2 {
+		t.Fatalf("unhidden item lost touchCount7d: %#v", view)
 	}
 }
 
@@ -289,7 +445,7 @@ func assertTouchLateUndoNoop(t *testing.T, s *Store, app *App, id, title string,
 	}
 }
 
-func assertTouchDerivationCase(t *testing.T, s *Store, id, title string, x, y float64, color string, days []int, wantActive, wantStale bool, wantCount int) {
+func assertTouchDerivationCase(t *testing.T, s *Store, id, title string, x, y float64, color string, createdDaysAgo int, days []int, wantActive, wantStale bool, wantCount int) {
 	t.Helper()
 	if err := s.update(Item{
 		ID:        id,
@@ -301,6 +457,7 @@ func assertTouchDerivationCase(t *testing.T, s *Store, id, title string, x, y fl
 	}); err != nil {
 		t.Fatalf("seed %s: %v", id, err)
 	}
+	ageItemCreatedAt(t, s, id, createdDaysAgo)
 	for _, day := range days {
 		insertTouchFact(t, s, id, day, time.Now())
 	}

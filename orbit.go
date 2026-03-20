@@ -288,6 +288,18 @@ type touchSummary struct {
 	touchedToday   bool
 }
 
+func (s *Store) createdLocalDay(id string) (string, error) {
+	var createdAt string
+	if err := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
+		return "", err
+	}
+	created, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return "", err
+	}
+	return localDayString(created), nil
+}
+
 func localDayString(t time.Time) string {
 	return t.In(time.Local).Format("2006-01-02")
 }
@@ -335,6 +347,10 @@ func (s *Store) applyTouchState(it *Item) error {
 	if err != nil {
 		return err
 	}
+	createdDay, err := s.createdLocalDay(it.ID)
+	if err != nil {
+		return err
+	}
 	it.TouchedToday = summary.touchedToday
 	it.TouchCount7d = summary.touchCount7d
 	it.LastTouchedDay = summary.lastTouchedDay
@@ -343,10 +359,14 @@ func (s *Store) applyTouchState(it *Item) error {
 		it.Stale = false
 		return nil
 	}
+	activityAnchorDay := createdDay
+	if summary.lastTouchedDay > activityAnchorDay {
+		activityAnchorDay = summary.lastTouchedDay
+	}
 	if it.InCenter {
-		it.Active = summary.touchedToday || withinLocalDays(summary.lastTouchedDay, 2) || summary.touchCount7d >= 3
+		it.Active = withinLocalDays(activityAnchorDay, 2) || summary.touchCount7d >= 3
 	} else {
-		it.Active = summary.touchedToday || withinLocalDays(summary.lastTouchedDay, 4) || summary.touchCount7d >= 2
+		it.Active = withinLocalDays(activityAnchorDay, 4) || summary.touchCount7d >= 2
 	}
 	it.Stale = !it.Active
 	return nil
@@ -758,7 +778,21 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	state, err := a.store.touchItemState(item.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"ok":             true,
+		"id":             state.ID,
+		"active":         state.Active,
+		"stale":          state.Stale,
+		"touchedToday":   state.TouchedToday,
+		"touchCount7d":   state.TouchCount7d,
+		"lastTouchedDay": state.LastTouchedDay,
+		"inCenter":       state.InCenter,
+	})
 }
 
 func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -992,9 +1026,15 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	item, err := a.store.touchItemState(in.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	hiddenN, _ := a.store.hiddenCount(in.ContextID)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
+	b, _ := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
+	w.Write(b)
 }
 
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {

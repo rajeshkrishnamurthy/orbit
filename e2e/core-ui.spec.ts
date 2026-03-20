@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { expect, test, type Page, type Locator } from '@playwright/test';
 
 async function createCard(page: Page, title: string, x = 1050, y = 620): Promise<Locator> {
@@ -115,6 +117,30 @@ async function openActionDrawer(pin: Locator): Promise<void> {
   await expect(pin.locator('.pin-action-drawer')).toBeVisible();
 }
 
+async function pinChrome(pin: Locator): Promise<{ borderColor: string; boxShadow: string }> {
+  return pin.evaluate((el) => {
+    const style = getComputedStyle(el as HTMLElement);
+    return {
+      borderColor: style.borderColor,
+      boxShadow: style.boxShadow,
+    };
+  });
+}
+
+function sqliteDbPath(): string {
+  return path.join(process.cwd(), '.e2e-data', 'orbit.db');
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function ageCardInDb(id: string, daysAgo: number): void {
+  const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+  const sql = `UPDATE items SET created_at=${sqlLiteral(when)} WHERE id=${sqlLiteral(id)};`;
+  execFileSync('sqlite3', [sqliteDbPath(), sql], { stdio: 'pipe' });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#surface')).toBeVisible();
@@ -176,6 +202,64 @@ test('center/periphery lens + slider updates visible card set', async ({ page })
   expect(normalize(center35)).toBeTruthy();
 });
 
+test('stale lens shows only entry-time stale cards and refreshes on reload', async ({ page }) => {
+  await page.goto('/?canvas=contexts');
+  await expect(page.locator('#surface')).toBeVisible();
+
+  const contextTitle = `stale-lens-context-${Date.now()}`;
+  const contextPin = await createContext(page, contextTitle, 980, 560);
+  const contextId = await contextPin.getAttribute('data-id');
+  expect(contextId).toBeTruthy();
+  await contextPin.hover();
+  await contextPin.locator('.pin-enter').click({ force: true });
+  await expect(page).toHaveURL(new RegExp(`[?&]ctx=${contextId}`));
+  await expect(page.locator('#context-name')).toHaveText(contextTitle);
+
+  const staleTitle = `stale-lens-stale-${Date.now()}`;
+  const activeTitle = `stale-lens-active-${Date.now()}`;
+
+  const stalePin = await createCard(page, staleTitle, 1120, 260);
+  const activePin = await createCard(page, activeTitle, 900, 260);
+  const staleId = await stalePin.getAttribute('data-id');
+  const activeId = await activePin.getAttribute('data-id');
+  expect(staleId).toBeTruthy();
+  expect(activeId).toBeTruthy();
+
+  ageCardInDb(staleId!, 8);
+  await page.reload();
+
+  const staleReloaded = page.locator(`.pin[data-id="${staleId}"]`);
+  const activeReloaded = page.locator(`.pin[data-id="${activeId}"]`);
+  await expect(staleReloaded).toHaveAttribute('data-stale', 'true');
+  await expect(activeReloaded).toHaveAttribute('data-stale', 'false');
+
+  const staleLens = page.locator('.lens-btn[data-lens="stale"]');
+  await expect(staleLens).toBeVisible();
+  await staleLens.click();
+  await expect(staleLens).toHaveClass(/active/);
+
+  await expect(activeReloaded).toHaveCount(0);
+  let visible = await visiblePinIds(page);
+  expect(visible).toEqual([staleId!]);
+
+  await staleReloaded.locator('.pin-touch').click();
+  await expect(staleReloaded).toHaveAttribute('data-stale', 'false');
+  visible = await visiblePinIds(page);
+  expect(visible).toEqual([staleId!]);
+
+  ageCardInDb(activeId!, 8);
+  visible = await visiblePinIds(page);
+  expect(visible).toEqual([staleId!]);
+
+  await page.reload();
+
+  await expect(staleLens).toHaveClass(/active/);
+  await expect(staleReloaded).toHaveCount(0);
+  await expect(activeReloaded).toHaveAttribute('data-stale', 'true');
+  visible = await visiblePinIds(page);
+  expect(visible).toEqual([activeId!]);
+});
+
 test('card color change persists after reload', async ({ page }) => {
   const pin = await createCard(page, `color-${Date.now()}`, 1180, 240);
 
@@ -230,6 +314,40 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
 });
 
+test('hide/unhide preserves stale state', async ({ page }) => {
+  const title = `hide-stale-${Date.now()}`;
+  const created = await createCard(page, title);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  ageCardInDb(id!, 8);
+  await page.reload();
+
+  const staleCard = page.locator(`.pin[data-id="${id}"]`);
+  await expect(staleCard).toHaveAttribute('data-stale', 'true');
+
+  const initialCount = await getHiddenCount(page);
+
+  await openActionDrawer(staleCard);
+  await staleCard.locator('.pin-action-drawer .pin-hide').click();
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+
+  await expect.poll(() => getHiddenCount(page)).toBe(initialCount + 1);
+
+  const hiddenToggle = page.locator('#hidden-toggle');
+  await hiddenToggle.click();
+
+  const hiddenItem = page.locator('.hidden-tray-item', { hasText: title }).first();
+  await expect(hiddenItem).toBeVisible();
+
+  await hiddenItem.dragTo(page.locator('#surface'), { targetPosition: { x: 360, y: 300 } });
+
+  const restored = page.locator(`.pin[data-id="${id}"]`);
+  await expect(restored).toHaveCount(1);
+  await expect(restored).toHaveAttribute('data-stale', 'true');
+  await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
+});
+
 test('focus cards use top-right hover drawer with fixed action set', async ({ page }) => {
   const created = await createCard(page, `drawer-${Date.now()}`, 1140, 260);
   await expect(created.locator('.pin-action-affordance')).toBeVisible();
@@ -279,20 +397,60 @@ test('touch control stays explicit, toggles today state, and supports undo', asy
   await expect(touchButton).toBeVisible();
   await expect(created.locator('.pin-action-drawer .pin-touch')).toHaveCount(0);
   await expect(created).toHaveAttribute('data-touched-today', 'false');
-  await expect(created).toHaveAttribute('data-active', 'false');
-  await expect(created).toHaveAttribute('data-stale', 'true');
+  await expect(created).toHaveAttribute('data-active', 'true');
+  await expect(created).toHaveAttribute('data-stale', 'false');
+  await expect(created).toHaveAttribute('data-touch-count7d', '0');
+  await expect(created).toHaveAttribute('data-last-touched-day', '');
 
   await touchButton.click();
   await expect(created).toHaveAttribute('data-touched-today', 'true');
   await expect(created).toHaveAttribute('data-active', 'true');
   await expect(created).toHaveAttribute('data-stale', 'false');
+  await expect(created).toHaveAttribute('data-touch-count7d', '1');
+  await expect(created).toHaveAttribute('data-last-touched-day', /\d{4}-\d{2}-\d{2}/);
   await expect(page.locator('.undo-toast')).toContainText('Touched');
 
   await page.locator('.undo-btn').click();
   await expect(page.locator('.undo-toast')).toHaveCount(0);
   await expect(created).toHaveAttribute('data-touched-today', 'false');
-  await expect(created).toHaveAttribute('data-active', 'false');
-  await expect(created).toHaveAttribute('data-stale', 'true');
+  await expect(created).toHaveAttribute('data-active', 'true');
+  await expect(created).toHaveAttribute('data-stale', 'false');
+  await expect(created).toHaveAttribute('data-touch-count7d', '0');
+  await expect(created).toHaveAttribute('data-last-touched-day', '');
+});
+
+test('stale emphasis remains visible for stale cards and stays off active cards', async ({ page }) => {
+  const staleSeed = page.locator('.pin').first();
+  const staleSeedId = await staleSeed.getAttribute('data-id');
+  expect(staleSeedId).toBeTruthy();
+
+  ageCardInDb(staleSeedId!, 10);
+  await page.reload();
+
+  const staleCard = page.locator(`.pin[data-id="${staleSeedId}"]`);
+  await expect(staleCard).toHaveAttribute('data-stale', 'true');
+
+  const activeCard = await createCard(page, `active-${Date.now()}`, 860, 260);
+  await expect(activeCard).toHaveAttribute('data-stale', 'false');
+
+  const staleNormal = await pinChrome(staleCard);
+  const activeNormal = await pinChrome(activeCard);
+
+  expect(staleNormal.borderColor).not.toBe(activeNormal.borderColor);
+  expect(staleNormal.boxShadow).not.toBe(activeNormal.boxShadow);
+
+  await staleCard.click({ position: { x: 30, y: 20 } });
+  await expect(staleCard).toHaveClass(/selected/);
+  const staleSelected = await pinChrome(staleCard);
+
+  expect(staleSelected.borderColor).not.toBe(activeNormal.borderColor);
+  expect(staleSelected.boxShadow).not.toBe(activeNormal.boxShadow);
+
+  await dragBy(page, staleCard, 48, 18);
+  const staleDragged = await pinChrome(staleCard);
+
+  expect(staleDragged.borderColor).not.toBe(activeNormal.borderColor);
+  expect(staleDragged.boxShadow).not.toBe(activeNormal.boxShadow);
 });
 
 test('complete shows acknowledgment, supports undo, and expires after 6s', async ({ page }) => {
@@ -310,6 +468,7 @@ test('complete shows acknowledgment, supports undo, and expires after 6s', async
 
   const samePin = page.locator(`.pin[data-id="${id}"]`);
   await expect(samePin).toHaveAttribute('data-state', 'completed');
+  await expect(samePin.locator('.pin-complete-smile')).toHaveCount(1);
   await expect(page.locator('.undo-toast')).toContainText('Completed');
   await page.waitForTimeout(1500);
   await expect(page.locator('.undo-toast')).toContainText('Completed');

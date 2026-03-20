@@ -12,7 +12,7 @@
 .surface.focus-emphasis::before{opacity:.8}
 .surface.focus-emphasis::after{opacity:.48}
 .orbit{position:absolute;border:1px dashed rgba(92,108,166,.34);border-radius:999px;opacity:.22;pointer-events:none;z-index:2}.o1{inset:300px 500px}.o2{inset:220px 400px}.o3{inset:130px 280px}.o4{inset:40px 150px}
-.pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease, filter .18s ease, background .16s ease, border-color .16s ease;box-shadow:0 8px 16px rgba(8,12,24,.20),inset 0 1px 0 rgba(255,255,255,.13),inset 0 -1px 0 rgba(0,0,0,.10);filter:saturate(var(--pin-sat,.94)) brightness(var(--pin-bright,.98));opacity:var(--pin-alpha,.97);z-index:4}
+.pin{position:absolute;min-width:160px;max-width:220px;background:var(--c1);border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:10px 30px 10px 11px;cursor:grab;user-select:none;touch-action:none;transform-origin:center center;transition:transform .1s ease, box-shadow .12s ease, opacity .14s ease, filter .18s ease, background .16s ease;box-shadow:0 8px 16px rgba(8,12,24,.20),inset 0 1px 0 rgba(255,255,255,.13),inset 0 -1px 0 rgba(0,0,0,.10);filter:saturate(var(--pin-sat,.94)) brightness(var(--pin-bright,.98));opacity:var(--pin-alpha,.97);z-index:4}
 .pin::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;background:linear-gradient(160deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,.00) 42%,rgba(0,0,0,.04) 100%)}
 .pin::after{content:"";position:absolute;inset:1px;border-radius:10px;pointer-events:none;border:1px solid rgba(255,255,255,.06)}
 .pin-edge{position:absolute;display:block;background:transparent;cursor:grab;z-index:1}
@@ -27,6 +27,10 @@
 .pin[data-band="periphery"]{--pin-alpha:.92;--pin-sat:.88;--pin-bright:.95}
 .pin.dragging,.pin.selected{--pin-alpha:1;--pin-sat:1;--pin-bright:1}
 .pin.selected{border-color:rgba(255,255,255,.56);box-shadow:0 16px 30px rgba(8,12,24,.34),0 0 0 1px rgba(226,236,255,.30),0 0 0 8px rgba(180,200,255,.12),inset 0 1px 0 rgba(255,255,255,.24),inset 0 -1px 0 rgba(0,0,0,.16)}
+.pin[data-stale="true"]{border-color:rgba(255,212,156,.70);box-shadow:0 11px 21px rgba(8,12,24,.28),0 0 0 1px rgba(255,212,156,.32),0 0 0 12px rgba(255,212,156,.13),inset 0 1px 0 rgba(255,255,255,.15),inset 0 -1px 0 rgba(0,0,0,.08)}
+.pin[data-stale="true"]::before{background:linear-gradient(160deg,rgba(255,223,173,.18) 0%,rgba(255,223,173,.00) 42%,rgba(0,0,0,.04) 100%)}
+.pin[data-stale="true"]::after{border-color:rgba(255,223,173,.28)}
+.pin[data-stale="true"].selected,.pin[data-stale="true"].dragging,.pin[data-stale="true"]:hover,.pin[data-stale="true"]:focus-within{border-color:rgba(255,212,156,.70);box-shadow:0 11px 21px rgba(8,12,24,.28),0 0 0 1px rgba(255,212,156,.32),0 0 0 12px rgba(255,212,156,.13),inset 0 1px 0 rgba(255,255,255,.15),inset 0 -1px 0 rgba(0,0,0,.08)}
 .pin[data-state="completed"]{background:linear-gradient(180deg,rgba(74,112,126,.96),rgba(54,88,99,.96));border-color:rgba(198,233,223,.48);box-shadow:0 10px 22px rgba(8,12,24,.26),0 0 0 1px rgba(191,228,219,.16),inset 0 1px 0 rgba(255,255,255,.18)}
 .pin[data-state="completed"] .pin-title input,.pin[data-state="completed"] .pin-note textarea{color:#edf8f4}
 .pin[data-state="completed"] .pin-note textarea{opacity:.82}
@@ -41,7 +45,7 @@
 .pin-hide{font-size:11px;transform:translateY(-2px)}
 .pin-complete{background:rgba(12,17,31,.2);color:#f6fbff;font-size:11px;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
 .pin-touch{background:rgba(12,17,31,.18);color:rgba(236,241,255,.72);font-size:11px;font-weight:800;box-shadow:inset 0 0 0 1px rgba(255,255,255,.14);opacity:1;pointer-events:auto;transition:background .12s ease, color .12s ease, box-shadow .12s ease, transform .12s ease}
-.pin-touch[data-touched-today="true"]{background:rgba(110,140,255,.94);color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.16) inset,0 0 0 6px rgba(110,140,255,.10)}
+.pin-touch[data-touched-today="true"]{background:rgba(var(--pin-touch-accent-rgb,110,140,255),.94);color:#fff;box-shadow:0 0 0 1px rgba(255,255,255,.16) inset,0 0 0 6px rgba(var(--pin-touch-halo-rgb,110,140,255),var(--pin-touch-ring-alpha,.12)),0 0 16px 2px rgba(var(--pin-touch-halo-rgb,110,140,255),var(--pin-touch-blur-alpha,.08))}
 
 .pin-delete{position:absolute;top:4px;right:6px;opacity:0;pointer-events:none;transition:opacity .12s ease, background .12s ease}
 .pin-action-host{position:absolute;top:4px;right:6px;width:104px;height:18px;z-index:7;cursor:default}
@@ -60,28 +64,42 @@
 .pin-delete:hover,.pin-hide:hover,.pin-enter:hover,.pin-slip:hover,.pin-complete:hover,.pin-touch:hover{background:rgba(0,0,0,.28)}
 .pin[data-saved="false"] .pin-complete{opacity:.5;pointer-events:none}
 .pin[data-state="completed"] .pin-complete,.pin[data-state="completed"] .pin-delete,.pin[data-state="completed"] .pin-hide,.pin[data-state="completed"] .pin-slip,.pin[data-state="completed"] .pin-touch{opacity:0;pointer-events:none}
-.pin.pin--complete-pop .pin-complete{opacity:1;transform:translateY(0) scale(1.18);animation:pin-complete-pop 180ms ease-out forwards}
-.pin.pin--complete-pulse{animation:pin-complete-pulse 260ms ease-out 1}
-.pin.pin--complete-jiggle{animation:pin-complete-jiggle 220ms ease-in-out 1}
+.pin-complete-smile{position:absolute;left:50%;bottom:9px;width:28px;height:12px;border-bottom:1px solid rgba(237,248,244,.56);border-radius:0 0 999px 999px;opacity:0;pointer-events:none;transform:translateX(-50%) translateY(4px) scaleX(.72);z-index:3;filter:drop-shadow(0 0 8px rgba(191,228,219,.08))}
+.pin.pin--complete-pop .pin-complete{opacity:1;transform:translateY(0) scale(1.12);animation:pin-complete-pop 220ms cubic-bezier(.2,.82,.2,1) forwards}
+.pin.pin--complete-pulse{animation:pin-complete-pulse 340ms ease-out 1, pin-complete-lift 420ms cubic-bezier(.2,.8,.2,1) 1}
+.pin.pin--complete-smile .pin-complete-smile{animation:pin-complete-smile 520ms ease-out 1 forwards}
+.pin.pin--complete-jiggle{animation:pin-complete-sway 360ms ease-in-out 1}
 .pin.pin--complete-exit{opacity:0;transform:translateY(-16px) scale(.95);transition:transform 980ms cubic-bezier(.18,.72,.22,1), opacity 980ms ease}
 
 @keyframes pin-complete-pop{
-  0%{transform:translateY(0) scale(.82)}
-  58%{transform:translateY(0) scale(1.22)}
+  0%{transform:translateY(0) scale(.92)}
+  60%{transform:translateY(0) scale(1.12)}
   100%{transform:translateY(0) scale(1)}
 }
 
 @keyframes pin-complete-pulse{
   0%{box-shadow:0 10px 22px rgba(8,12,24,.26),0 0 0 0 rgba(191,228,219,.00),inset 0 1px 0 rgba(255,255,255,.18)}
-  55%{box-shadow:0 12px 26px rgba(8,12,24,.30),0 0 0 8px rgba(191,228,219,.18),inset 0 1px 0 rgba(255,255,255,.18)}
+  55%{box-shadow:0 11px 24px rgba(8,12,24,.28),0 0 0 5px rgba(191,228,219,.12),inset 0 1px 0 rgba(255,255,255,.18)}
   100%{box-shadow:0 10px 22px rgba(8,12,24,.26),0 0 0 0 rgba(191,228,219,.00),inset 0 1px 0 rgba(255,255,255,.18)}
 }
 
-@keyframes pin-complete-jiggle{
-  0%{transform:translateX(0) scale(1)}
-  28%{transform:translateX(-2px) rotate(-1.2deg) scale(1.01)}
-  62%{transform:translateX(2px) rotate(1deg) scale(1.01)}
-  100%{transform:translateX(0) rotate(0deg) scale(1)}
+@keyframes pin-complete-lift{
+  0%{transform:translateY(0) scale(1)}
+  50%{transform:translateY(-1px) scale(1.008)}
+  100%{transform:translateY(0) scale(1)}
+}
+
+@keyframes pin-complete-sway{
+  0%{transform:translateX(0) translateY(0) rotate(0deg) scale(1)}
+  35%{transform:translateX(-1px) translateY(-1px) rotate(-.35deg) scale(1.004)}
+  68%{transform:translateX(1px) rotate(.25deg) scale(1.004)}
+  100%{transform:translateX(0) translateY(0) rotate(0deg) scale(1)}
+}
+
+@keyframes pin-complete-smile{
+  0%{opacity:0;transform:translateX(-50%) translateY(5px) scaleX(.64)}
+  40%{opacity:.66;transform:translateX(-50%) translateY(1px) scaleX(1.02)}
+  100%{opacity:.38;transform:translateX(-50%) translateY(0) scaleX(.9)}
 }
 .toolbar{position:absolute;right:12px;top:12px;display:flex;gap:8px;align-items:center;background:rgba(10,14,26,.42);border:1px solid rgba(46,59,104,.62);border-radius:10px;padding:7px 9px;backdrop-filter:blur(3px);z-index:20}
 .sw{width:18px;height:18px;border-radius:999px;border:2px solid rgba(255,255,255,.65);cursor:pointer}.sw.active{outline:2px solid #fff;outline-offset:1px}

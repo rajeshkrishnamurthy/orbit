@@ -9,10 +9,13 @@
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const UNDO_WINDOW_MS = 6000;
   const DRAG_THRESHOLD_PX = 5;
+  const LENS_MODE_STORAGE_KEY = 'orbit.lens-mode';
   let hiddenCount = window.__HIDDEN_COUNT__ || 0;
-  let lens = 'all';
+  let lens = readLensMode();
   let lensRatio = 0.68;
   const lensExempt = new Set();
+  let staleLensSnapshot = new Set();
+  const staleLensDetachedPins = new Map();
   let dragHaloActive = false;
   let activePin = null;
   let undoState = null;
@@ -127,19 +130,87 @@
     hiddenTray.style.top = top + 'px';
   }
 
+  function readLensMode(){
+    try {
+      const stored = sessionStorage.getItem(LENS_MODE_STORAGE_KEY);
+      return stored === 'stale' ? 'stale' : 'all';
+    } catch (_err) {
+      return 'all';
+    }
+  }
+
+  function persistLensMode(){
+    try {
+      if (lens === 'stale') sessionStorage.setItem(LENS_MODE_STORAGE_KEY, 'stale');
+      else sessionStorage.removeItem(LENS_MODE_STORAGE_KEY);
+    } catch (_err) {}
+  }
+
+  function readStaleLensSnapshot(){
+    return [...surface.querySelectorAll('.pin[data-stale="true"]')]
+      .map((pin) => pin.dataset.id)
+      .filter((id) => typeof id === 'string' && id.length > 0);
+  }
+
+  function captureStaleLensSnapshot(){
+    staleLensSnapshot = new Set(readStaleLensSnapshot());
+  }
+
+  function restoreDetachedStalePins(){
+    if (!staleLensDetachedPins.size) return;
+    for (const [id, pin] of staleLensDetachedPins.entries()) {
+      if (pin.isConnected) continue;
+      pin.style.display = '';
+      surface.appendChild(pin);
+      staleLensDetachedPins.delete(id);
+    }
+  }
+
+  function syncStaleLensDom(){
+    if (lens !== 'stale') {
+      restoreDetachedStalePins();
+      return;
+    }
+    surface.querySelectorAll('.pin').forEach((pin) => {
+      const id = pin.dataset.id;
+      const visible = staleLensSnapshot.has(id);
+      if (visible) {
+        pin.style.display = '';
+        return;
+      }
+      staleLensDetachedPins.set(id, pin);
+      pin.remove();
+    });
+  }
+
+  function setLensMode(nextLens){
+    lens = nextLens;
+    if (lens === 'stale') {
+      captureStaleLensSnapshot();
+    } else {
+      lensExempt.clear();
+      staleLensSnapshot.clear();
+      restoreDetachedStalePins();
+    }
+    persistLensMode();
+    renderLensButtons();
+    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
+    applyLens();
+  }
+
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
-  ['all','center','periphery'].forEach(name => {
+  ['all','center','periphery','stale'].forEach(name => {
     const b = document.createElement('button');
     b.className = 'lens-btn';
     b.dataset.lens = name;
     b.textContent = name[0].toUpperCase() + name.slice(1);
     b.onclick = () => {
-      lens = name;
-      lensExempt.clear(); // explicit lens re-application
-      renderLensButtons();
-      surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
-      applyLens();
+      if (name === 'stale') {
+        setLensMode(lens === 'stale' ? 'all' : 'stale');
+        return;
+      }
+      setLensMode(name);
     };
     lensWrap.appendChild(b);
   });
@@ -181,6 +252,90 @@
     return m ? {r:+m[1],g:+m[2],b:+m[3]} : {r:80,g:100,b:150};
   }
 
+  function rgbToHsl(rgb){
+    const r = rgb.r / 255;
+    const g = rgb.g / 255;
+    const b = rgb.b / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const delta = max - min;
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+
+    if (delta !== 0) {
+      s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+      switch (max) {
+        case r:
+          h = (g - b) / delta + (g < b ? 6 : 0);
+          break;
+        case g:
+          h = (b - r) / delta + 2;
+          break;
+        default:
+          h = (r - g) / delta + 4;
+          break;
+      }
+      h /= 6;
+    }
+
+    return {h, s, l};
+  }
+
+  function hslToRgb(hsl){
+    const hue2rgb = (p, q, t) => {
+      let tt = t;
+      if (tt < 0) tt += 1;
+      if (tt > 1) tt -= 1;
+      if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+      if (tt < 1 / 2) return q;
+      if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+      return p;
+    };
+
+    let r = hsl.l;
+    let g = hsl.l;
+    let b = hsl.l;
+
+    if (hsl.s !== 0) {
+      const q = hsl.l < 0.5 ? hsl.l * (1 + hsl.s) : hsl.l + hsl.s - hsl.l * hsl.s;
+      const p = 2 * hsl.l - q;
+      r = hue2rgb(p, q, hsl.h + 1 / 3);
+      g = hue2rgb(p, q, hsl.h);
+      b = hue2rgb(p, q, hsl.h - 1 / 3);
+    }
+
+    return {r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255)};
+  }
+
+  function clamp01(value){
+    return Math.max(0, Math.min(1, value));
+  }
+
+  function deriveTouchColors(rgb, luminance){
+    const hsl = rgbToHsl(rgb);
+    const pivot = 0.62;
+    const isBright = luminance >= pivot;
+    const direction = isBright ? -1 : 1;
+    const contrast = isBright
+      ? clamp01((luminance - pivot) / 0.28)
+      : clamp01((pivot - luminance) / 0.28);
+    const ringSpread = isBright ? 8 + Math.round(contrast * 2) : 6;
+    const ringAlpha = isBright ? 0.18 + contrast * 0.05 : 0.11 + contrast * 0.02;
+    const blurAlpha = isBright ? 0.12 + contrast * 0.04 : 0.08;
+    const accent = hslToRgb({
+      h: hsl.h,
+      s: clamp01(hsl.s * (isBright ? 1.12 : 1.08) + 0.03),
+      l: clamp01(hsl.l + direction * (isBright ? 0.10 + contrast * 0.03 : 0.12 + contrast * 0.03))
+    });
+    const halo = hslToRgb({
+      h: hsl.h,
+      s: clamp01(hsl.s * (isBright ? 1.18 : 1.04) + 0.04),
+      l: clamp01(hsl.l + direction * (isBright ? 0.22 + contrast * 0.08 : 0.18 + contrast * 0.06))
+    });
+    return {accent, halo, ringSpread, ringAlpha, blurAlpha};
+  }
+
   function setActivePin(pin){
     activePin = pin;
     surface.querySelectorAll('.pin').forEach(p => p.classList.toggle('selected', p === pin));
@@ -213,14 +368,6 @@
   function syncTouchState(pin){
     if (mode !== 'focus') return;
     const touchedToday = pin.dataset.touchedToday === 'true';
-    const touchCount7d = Number(pin.dataset.touchCount7d || '0');
-    const lastTouchedDay = pin.dataset.lastTouchedDay || '';
-    const isCenterBand = pin.dataset.band === 'center';
-    const active = isCenterBand
-      ? (withinLocalDaysJS(lastTouchedDay, 2) || touchCount7d >= 3)
-      : (withinLocalDaysJS(lastTouchedDay, 4) || touchCount7d >= 2);
-    pin.dataset.active = active ? 'true' : 'false';
-    pin.dataset.stale = active ? 'false' : 'true';
     const touch = pin.querySelector('.pin-touch');
     if (touch) {
       touch.dataset.touchedToday = touchedToday ? 'true' : 'false';
@@ -236,6 +383,12 @@
     pin.dataset.color = color;
     const rgb = resolveCssColorToRgb(color);
     const luminance = (0.2126*rgb.r + 0.7152*rgb.g + 0.0722*rgb.b)/255;
+    const touch = deriveTouchColors(rgb, luminance);
+    pin.style.setProperty('--pin-touch-accent-rgb', `${touch.accent.r}, ${touch.accent.g}, ${touch.accent.b}`);
+    pin.style.setProperty('--pin-touch-halo-rgb', `${touch.halo.r}, ${touch.halo.g}, ${touch.halo.b}`);
+    pin.style.setProperty('--pin-touch-ring-spread', `${touch.ringSpread}px`);
+    pin.style.setProperty('--pin-touch-ring-alpha', touch.ringAlpha.toFixed(3));
+    pin.style.setProperty('--pin-touch-blur-alpha', touch.blurAlpha.toFixed(3));
     const titleEl = pin.querySelector('.pin-title input');
     const noteEl = pin.querySelector('.pin-note textarea');
     const delEl = pin.querySelector('.pin-delete');
@@ -388,7 +541,7 @@
   function renderLensButtons(){
     document.querySelectorAll('.lens-btn').forEach(b => b.classList.toggle('active', b.dataset.lens === lens));
     const sw = document.querySelector('.lens-slider-wrap');
-    if (sw) sw.hidden = (lens === 'all');
+    if (sw) sw.hidden = (lens === 'all' || lens === 'stale');
     updateBoundaryCue(false);
   }
 
@@ -403,10 +556,21 @@
     return d > cutoff;
   }
 
+  function isLensVisible(pin){
+    const id = pin.dataset.id;
+    if (lens === 'all') return true;
+    if (lens === 'stale') return staleLensSnapshot.has(id);
+    return lensExempt.has(id) || inLens(pin);
+  }
+
   function applyLens(){
+    if (lens === 'stale') {
+      syncStaleLensDom();
+      return;
+    }
+    restoreDetachedStalePins();
     surface.querySelectorAll('.pin').forEach(pin => {
-      const id = pin.dataset.id;
-      const visible = lens === 'all' || lensExempt.has(id) || inLens(pin);
+      const visible = isLensVisible(pin);
       pin.style.display = visible ? '' : 'none';
     });
   }
@@ -417,7 +581,7 @@
     surface.style.setProperty('--center-radius', r + 'px');
     boundaryEl.style.width = (r*2) + 'px';
     boundaryEl.style.height = (r*2) + 'px';
-    const shouldShow = forceShow || dragHaloActive || lens !== 'all';
+    const shouldShow = forceShow || dragHaloActive || (lens !== 'all' && lens !== 'stale');
     boundaryEl.classList.toggle('show', shouldShow);
   }
 
@@ -474,7 +638,10 @@
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify(payload)
-      }).then(() => {
+      }).then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (data) applyTouchResponse(pin, data);
         pin.dataset.saved = 'true';
         markPersisted(pin);
       });
@@ -621,11 +788,13 @@
       if (!pin.isConnected) {
         restoredPin = createPin(payload, false, true);
       }
-      restoredPin.classList.remove('pin--complete-pop', 'pin--complete-pulse', 'pin--complete-exit');
+      restoredPin.classList.remove('pin--complete-pop', 'pin--complete-pulse', 'pin--complete-smile', 'pin--complete-exit');
+      const smile = restoredPin.querySelector('.pin-complete-smile');
+      if (smile) smile.remove();
       setPinState(restoredPin, 'active');
       restoredPin.dataset.transitioning = 'false';
       applyDistanceStyle(restoredPin);
-      restoredPin.style.display = inLens(restoredPin) ? '' : 'none';
+      restoredPin.style.display = isLensVisible(restoredPin) ? '' : 'none';
       setActivePin(restoredPin);
       return true;
     });
@@ -636,6 +805,8 @@
     if (typeof data.touchedToday === 'boolean') pin.dataset.touchedToday = data.touchedToday ? 'true' : 'false';
     if (Number.isFinite(Number(data.touchCount7d))) pin.dataset.touchCount7d = String(Number(data.touchCount7d));
     if (typeof data.lastTouchedDay === 'string') pin.dataset.lastTouchedDay = data.lastTouchedDay;
+    if (typeof data.active === 'boolean') pin.dataset.active = data.active ? 'true' : 'false';
+    if (typeof data.stale === 'boolean') pin.dataset.stale = data.stale ? 'true' : 'false';
     syncTouchState(pin);
   }
 
@@ -709,13 +880,12 @@
     }
     setPinState(pin, 'completed');
     pin.dataset.transitioning = 'false';
-    pin.classList.add('pin--complete-pop', 'pin--complete-pulse');
+    pin.classList.add('pin--complete-pop', 'pin--complete-pulse', 'pin--complete-smile');
     if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
     const token = Symbol(payload.id);
     const exitTimer = setTimeout(() => {
       const current = completionTransitions.get(payload.id);
       if (!current || current.token !== token) return;
-      pin.classList.add('pin--complete-jiggle');
       setTimeout(() => {
         const latest = completionTransitions.get(payload.id);
         if (!latest || latest.token !== token) return;
@@ -971,7 +1141,7 @@
     const edgeTargets = '<span class="pin-edge pin-edge--top" aria-hidden="true"></span><span class="pin-edge pin-edge--right" aria-hidden="true"></span><span class="pin-edge pin-edge--bottom" aria-hidden="true"></span><span class="pin-edge pin-edge--left" aria-hidden="true"></span>';
     const enterBtn = mode === 'contexts' ? '<button class=\"pin-enter\" aria-label=\"Enter context\" title=\"Enter\">→</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class=\"pin-slip\" aria-label=\"Slipping\" title=\"Slipping\">!</button>' : '';
-    const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div><button class=\"pin-touch\" aria-pressed=\"false\" aria-label=\"Touch card\" title=\"Touch card\">◌</button>' : '';
+    const actionDrawer = mode === 'focus' ? '<div class=\"pin-action-host\"><span class=\"pin-action-affordance\" aria-hidden=\"true\">⋯</span><span class=\"pin-drawer-dim\" aria-hidden=\"true\"></span><div class=\"pin-action-drawer\" role=\"group\" aria-label=\"Card actions\"><button class=\"pin-hide\" aria-label=\"Minimize card\" title=\"Minimize\">–</button><button class=\"pin-delete\" aria-label=\"Cancel card\" title=\"Cancel\">×</button><button class=\"pin-complete\" aria-label=\"Complete card\" title=\"Complete\">✓</button></div></div><span class=\"pin-complete-smile\" aria-hidden=\"true\"></span><button class=\"pin-touch\" aria-pressed=\"false\" aria-label=\"Touch card\" title=\"Touch card\">◌</button>' : '';
     const deleteBtn = mode === 'contexts' ? '<button class=\"pin-delete\" aria-label=\"Delete card\" title=\"Delete\">×</button>' : '';
     pin.innerHTML = `${edgeTargets}${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class=\"pin-title\"><input value=\"${(item.title||'').replace(/"/g,'&quot;')}\" /></label><label class=\"pin-note\"><textarea rows=\"2\">${(item.subNote||'').replace(/</g,'&lt;')}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
@@ -981,7 +1151,7 @@
     setSlipping(pin, !!item.slipping);
     applyDistanceStyle(pin);
     bindPin(pin);
-    pin.style.display = (!markSaved || lensExempt.has(item.id) || inLens(pin)) ? '' : 'none';
+    pin.style.display = (lens === 'stale' ? isLensVisible(pin) : (!markSaved || isLensVisible(pin))) ? '' : 'none';
     const ta = pin.querySelector('.pin-note textarea'); fitNoteHeight(ta);
     setActivePin(pin);
     if (focusTitle) {
@@ -1032,12 +1202,12 @@
       try {
         const res = await fetch('/api/items/unhide-at', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, contextId: currentContextId, x, y})});
         if (!res.ok) throw new Error('unhide failed');
+        const data = await res.json().catch(() => null);
         const pending = pendingUnhide.get(id);
         if (!pending) return;
         pendingUnhide.delete(id);
-        pending.item.x = x;
-        pending.item.y = y;
-        if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(pending.item, false, true);
+        const restoredItem = data && data.item ? {...pending.item, ...data.item, x, y} : {...pending.item, x, y};
+        if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
       } catch (_err) {
         const pending = pendingUnhide.get(id);
         if (!pending) return;
@@ -1087,6 +1257,7 @@
 
   if (surface.querySelector('.pin')) setActivePin(surface.querySelector('.pin'));
   renderHiddenButton();
+  if (lens === 'stale') captureStaleLensSnapshot();
   renderLensButtons();
   applyLens();
 
