@@ -1,6 +1,9 @@
 (() => {
+  const layoutShell = document.querySelector('.layout-shell') || document.body;
+  const systemStrip = document.getElementById('system-strip');
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
+  const systemAckArea = document.getElementById('system-ack-stack');
   const boundaryEl = document.createElement('div');
   boundaryEl.className = 'lens-boundary';
   surface.appendChild(boundaryEl);
@@ -25,8 +28,66 @@
   let hiddenDragPreview = null;
   const completionTransitions = new Map();
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
+  let canvasViewportRect = null;
+  let systemAckState = null;
+  let filtersTrayOpen = false;
+  let filtersToggle = null;
+  let filtersPanel = null;
+  let swatchRail = null;
 
-  toolbar.innerHTML = '<span style="font-size:12px;color:#c4cdef">Card color</span>';
+  function syncCanvasViewportRect(){
+    const rect = surface.getBoundingClientRect();
+    canvasViewportRect = {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+      x: rect.x,
+      y: rect.y,
+    };
+    window.canvasViewportRect = canvasViewportRect;
+    return canvasViewportRect;
+  }
+
+  function getCanvasViewportRect(){
+    return canvasViewportRect || syncCanvasViewportRect();
+  }
+
+  window.layoutBoundaryGuard = {
+    canvasViewportRect: getCanvasViewportRect,
+    containsPoint(x, y){
+      const rect = getCanvasViewportRect();
+      return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    },
+  };
+  syncCanvasViewportRect();
+
+  toolbar.innerHTML = '';
+  const cardColorLabel = document.createElement('span');
+  cardColorLabel.className = 'toolbar__label';
+  cardColorLabel.textContent = 'Card color';
+  swatchRail = document.createElement('div');
+  swatchRail.className = 'toolbar__swatches';
+  const filtersTray = document.createElement('div');
+  filtersTray.className = 'filters-tray';
+  filtersToggle = document.createElement('button');
+  filtersToggle.type = 'button';
+  filtersToggle.className = 'filters-tray__toggle';
+  filtersToggle.id = 'filters-toggle';
+  filtersToggle.setAttribute('aria-controls', 'filters-panel');
+  filtersToggle.setAttribute('aria-expanded', 'false');
+  filtersToggle.textContent = 'Filters';
+  filtersPanel = document.createElement('div');
+  filtersPanel.className = 'filters-tray__panel';
+  filtersPanel.id = 'filters-panel';
+  filtersPanel.hidden = true;
+  const filtersControls = document.createElement('div');
+  filtersControls.className = 'filters-tray__controls';
+  filtersPanel.appendChild(filtersControls);
+  filtersTray.append(filtersToggle, filtersPanel);
+  toolbar.append(cardColorLabel, swatchRail, filtersTray);
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
   if (mode === 'focus' && contextNameEl) {
@@ -65,7 +126,20 @@
       savePin(activePin);
       refreshSwatches();
     };
-    toolbar.appendChild(b);
+    swatchRail.appendChild(b);
+  });
+
+  function setFiltersTrayOpen(nextOpen){
+    filtersTrayOpen = nextOpen;
+    if (!filtersPanel || !filtersToggle) return;
+    filtersPanel.hidden = !nextOpen;
+    filtersToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+    syncCanvasViewportRect();
+    if (trayOpen) placeHiddenTray();
+  }
+
+  filtersToggle.addEventListener('click', () => {
+    setFiltersTrayOpen(!filtersTrayOpen);
   });
 
   const hiddenBtn = document.createElement('button');
@@ -77,19 +151,19 @@
     if (trayOpen) await openHiddenTray();
     else closeHiddenTray();
   };
-  toolbar.appendChild(hiddenBtn);
+  filtersControls.appendChild(hiddenBtn);
   if (mode !== 'focus') hiddenBtn.hidden = true;
 
   const hiddenTray = document.createElement('div');
   hiddenTray.className = 'hidden-tray';
   hiddenTray.hidden = true;
-  surface.appendChild(hiddenTray);
+  layoutShell.appendChild(hiddenTray);
 
   const contextConfirm = document.createElement('div');
   contextConfirm.className = 'context-confirm';
   contextConfirm.hidden = true;
   contextConfirm.innerHTML = '<div class="context-confirm__panel"><div class="context-confirm__title">Delete context?</div><div class="context-confirm__body" id="context-confirm-body">This will also delete all items inside this context.</div><div class="context-confirm__actions"><button type="button" class="context-confirm__btn context-confirm__btn--ghost" id="context-confirm-cancel">Cancel</button><button type="button" class="context-confirm__btn context-confirm__btn--danger" id="context-confirm-delete">Delete</button></div></div>';
-  surface.appendChild(contextConfirm);
+  layoutShell.appendChild(contextConfirm);
   const contextConfirmBodyEl = contextConfirm.querySelector('#context-confirm-body');
   const contextConfirmCancelEl = contextConfirm.querySelector('#context-confirm-cancel');
   const contextConfirmDeleteEl = contextConfirm.querySelector('#context-confirm-delete');
@@ -112,20 +186,83 @@
     });
   }
 
-  function showCanvasWarning(message){
+  function stripWidth(){
+    return (systemStrip || layoutShell).getBoundingClientRect().width;
+  }
+
+  function ackModeForWidth(width){
+    if (width < 900) return 'hidden';
+    if (width < 1180) return 'compact';
+    return 'full';
+  }
+
+  function clearSystemAck(){
+    if (!systemAckState) return;
+    clearTimeout(systemAckState.timer);
+    systemAckState.el.remove();
+    systemAckState = null;
+  }
+
+  function refreshSystemAckMode(el){
+    if (!el) return;
+    el.dataset.ackMode = ackModeForWidth(stripWidth());
+  }
+
+  function mountSystemAck(el, durationMs){
+    if (!systemAckArea) return;
+    clearSystemAck();
+    systemAckArea.appendChild(el);
+    refreshSystemAckMode(el);
+    systemAckState = {
+      el,
+      timer: durationMs > 0 ? setTimeout(() => {
+        clearSystemAck();
+      }, durationMs) : null,
+    };
+  }
+
+  function buildSystemAck({kind, className, label, token, buttonLabel, onButton, durationMs = 0}){
     const el = document.createElement('div');
-    el.className = 'canvas-warning';
-    el.textContent = message || 'Unable to complete action.';
-    surface.appendChild(el);
-    setTimeout(() => { el.remove(); }, 2800);
+    el.className = `system-ack ${className}`;
+    el.dataset.ackKind = kind;
+    el.dataset.ackMode = 'full';
+    el.innerHTML = `
+      <span class="system-ack__label ${className}__label">${label}</span>
+      <span class="system-ack__token ${className}__token" aria-hidden="true">${token || label}</span>
+      ${buttonLabel ? `<button class="system-ack__action ${className}__action" type="button">${buttonLabel}</button>` : ''}
+    `;
+    const button = el.querySelector('button');
+    if (button && typeof onButton === 'function') {
+      button.addEventListener('click', async () => {
+        const ok = await onButton();
+        if (ok !== false) clearSystemAck();
+      });
+    }
+    mountSystemAck(el, durationMs);
+    return el;
+  }
+
+  function showCanvasWarning(message){
+    buildSystemAck({
+      kind: 'warning',
+      className: 'canvas-warning',
+      label: message || 'Unable to complete action.',
+      token: '!',
+      durationMs: 2800,
+    });
+  }
+
+  function setSystemAckMode(mode){
+    if (!systemAckState || !systemAckState.el) return;
+    systemAckState.el.dataset.ackMode = mode;
   }
 
   function placeHiddenTray(){
     const btnRect = hiddenBtn.getBoundingClientRect();
-    const surfRect = surface.getBoundingClientRect();
+    const stripRect = (systemStrip || layoutShell).getBoundingClientRect();
     const trayW = 240;
-    const left = Math.max(8, Math.min(surface.clientWidth - trayW - 8, (btnRect.right - surfRect.left) - trayW));
-    const top = Math.max(8, Math.min(surface.clientHeight - 230, (btnRect.bottom - surfRect.top) + 8));
+    const left = Math.max(8, Math.min(layoutShell.clientWidth - trayW - 8, (btnRect.right - stripRect.left) - trayW));
+    const top = Math.max(8, Math.min(layoutShell.clientHeight - 230, (btnRect.bottom - stripRect.top) + 8));
     hiddenTray.style.left = left + 'px';
     hiddenTray.style.top = top + 'px';
   }
@@ -196,6 +333,7 @@
     renderLensButtons();
     surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
     applyLens();
+    syncCanvasViewportRect();
   }
 
   const lensWrap = document.createElement('div');
@@ -214,7 +352,7 @@
     };
     lensWrap.appendChild(b);
   });
-  toolbar.appendChild(lensWrap);
+  filtersControls.appendChild(lensWrap);
 
   const sliderWrap = document.createElement('div');
   sliderWrap.className = 'lens-slider-wrap';
@@ -229,7 +367,7 @@
   });
   lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
   lensSlider.addEventListener('pointerup', () => setTimeout(() => updateBoundaryCue(false), 380));
-  toolbar.appendChild(sliderWrap);
+  filtersControls.appendChild(sliderWrap);
 
   const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
@@ -535,7 +673,11 @@
     const btn = document.getElementById('hidden-toggle');
     if (!btn) return;
     btn.textContent = `Hidden (${hiddenCount})`;
-    btn.hidden = hiddenCount <= 0 && !trayOpen;
+    btn.hidden = hiddenCount <= 0;
+    if (filtersToggle) {
+      filtersToggle.dataset.hiddenCount = String(hiddenCount);
+      filtersToggle.setAttribute('aria-label', hiddenCount > 0 ? `Filters, ${hiddenCount} hidden cards` : 'Filters');
+    }
   }
 
   function renderLensButtons(){
@@ -734,20 +876,26 @@
     }
     clearTimeout(undoState.timer);
     undoState.el.remove();
+    clearSystemAck();
     undoState = null;
   }
 
   function showUndoToast(message, kind, id, onUndo, durationMs = UNDO_WINDOW_MS){
     clearUndo();
     const el = document.createElement('div');
-    el.className = 'undo-toast';
-    el.innerHTML = `<span>${message}</span><button class="undo-btn">Undo</button>`;
+    el.className = 'system-ack undo-toast';
+    el.dataset.ackKind = kind;
+    el.innerHTML = `
+      <span class="undo-toast__label">${message}</span>
+      <span class="undo-toast__token" aria-hidden="true">↺</span>
+      <button class="undo-btn">Undo</button>
+    `;
     const btn = el.querySelector('.undo-btn');
     btn.addEventListener('click', async () => {
       const ok = await onUndo();
       if (ok !== false) clearUndo();
     });
-    surface.appendChild(el);
+    mountSystemAck(el, 0);
     undoState = {
       id,
       kind,
@@ -797,6 +945,16 @@
       restoredPin.style.display = isLensVisible(restoredPin) ? '' : 'none';
       setActivePin(restoredPin);
       return true;
+    });
+  }
+
+  function showResurfaceAck(){
+    buildSystemAck({
+      kind: 'resurface',
+      className: 'resurface-ack',
+      label: 'Resurfaced',
+      token: '↺',
+      durationMs: 2400,
     });
   }
 
@@ -1186,9 +1344,9 @@
     e.preventDefault();
     clearHiddenDragPreview();
     setDragHalo(false);
-    const rect = surface.getBoundingClientRect();
-    const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
-    const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
+    const rect = getCanvasViewportRect();
+    const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
+    const y = Math.max(6, Math.min(rect.height - 90, e.clientY - rect.top));
     if (pendingUnhide.has(id)) return;
     const itemIndex = hiddenItemsCache.findIndex(i => i.id === id);
     if (itemIndex < 0) return;
@@ -1208,6 +1366,7 @@
         pendingUnhide.delete(id);
         const restoredItem = data && data.item ? {...pending.item, ...data.item, x, y} : {...pending.item, x, y};
         if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
+        showResurfaceAck();
       } catch (_err) {
         const pending = pendingUnhide.get(id);
         if (!pending) return;
@@ -1239,6 +1398,7 @@
     if (!trayOpen) return;
     const target = e.target;
     if (!(target instanceof Node)) return;
+    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm')) return;
     if (surface.contains(target)) return;
     closeHiddenTray();
   });
@@ -1248,9 +1408,9 @@
     if (outsideTrayClick) closeHiddenTray();
     if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray') || e.target.closest('.context-confirm')) return;
     if (outsideTrayClick) return;
-    const rect = surface.getBoundingClientRect();
-    const x = Math.max(6, Math.min(surface.clientWidth - 190, e.clientX - rect.left));
-    const y = Math.max(6, Math.min(surface.clientHeight - 90, e.clientY - rect.top));
+    const rect = getCanvasViewportRect();
+    const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
+    const y = Math.max(6, Math.min(rect.height - 90, e.clientY - rect.top));
     createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
     e.preventDefault();
   });
@@ -1261,5 +1421,12 @@
   renderLensButtons();
   applyLens();
 
-  window.addEventListener('resize', () => { surface.querySelectorAll('.pin').forEach(applyDistanceStyle); applyLens(); updateBoundaryCue(false); if (trayOpen) placeHiddenTray(); });
+  window.addEventListener('resize', () => {
+    syncCanvasViewportRect();
+    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
+    applyLens();
+    updateBoundaryCue(false);
+    if (systemAckState) refreshSystemAckMode(systemAckState.el);
+    if (trayOpen) placeHiddenTray();
+  });
 })();

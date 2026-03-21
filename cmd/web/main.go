@@ -7,8 +7,8 @@ import (
 )
 
 func main() {
-	log.Printf("Orbit browser launch: entrypoint=cmd/web auto_open_browser=%v", true)
-	if err := orbit.RunWeb(true); err != nil {
+	log.Printf("Orbit browser launch: entrypoint=cmd/web auto_open_browser=%v", false)
+	if err := orbit.RunWeb(false); err != nil {
 		log.Fatal(err)
 	}
 }

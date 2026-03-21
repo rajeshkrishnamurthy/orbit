@@ -34,3 +34,7 @@ Create a measurable pre-change baseline so layout-invariant work can be validate
 
 ## Handoff to next packet
 Packet 1 consumes boundary-map and trace outputs to establish `canvasViewportRect` contract and shell split.
+
+## Packet 0 evidence package
+- Implementation notes: [`./layout-invariant-packet-0-baseline-audit-2026-03-21/implementation-notes.md`](./layout-invariant-packet-0-baseline-audit-2026-03-21/implementation-notes.md)
+- Artifact directory: [`./layout-invariant-packet-0-baseline-audit-2026-03-21/`](./layout-invariant-packet-0-baseline-audit-2026-03-21/)

@@ -8,18 +8,27 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="app-title">
-      <img class="app-title__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>
-      <h1>The Orbit</h1>
-    </div>
-    <p class="sub">For live priorities, not task lists</p>
-    <div class="surface" id="surface">
-      <div class="context-head in-canvas">
-        <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
-        <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
+    <div class="layout-shell">
+      <header class="system-strip" id="system-strip" data-region="system strip">
+        <div class="app-title">
+          <img class="app-title__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>
+          <h1>The Orbit</h1>
+        </div>
+        <p class="sub">For live priorities, not task lists</p>
+        <div class="system-strip__row">
+          <div class="context-head" data-region="context">
+            <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
+            <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
+          </div>
+          <div class="toolbar" id="toolbar"></div>
+          <div class="system-ack-stack" id="system-ack-stack" aria-live="polite" aria-atomic="true"></div>
+        </div>
+      </header>
+      <div class="canvas-region" data-region="canvas">
+        <div class="surface" id="surface">
+          <div class="orbit o1"></div><div class="orbit o2"></div><div class="orbit o3"></div><div class="orbit o4"></div>
+        </div>
       </div>
-      <div class="orbit o1"></div><div class="orbit o2"></div><div class="orbit o3"></div><div class="orbit o4"></div>
-      <div class="toolbar" id="toolbar"></div>
     </div>
   </div>
   <script>
