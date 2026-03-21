@@ -12,8 +12,8 @@ Reduce visual and interaction clutter in the top-left system-chrome region while
 
 ## In scope
 - Rebalance top-left chrome into two levels:
-  1. **Primary row (always visible):** Orbit logo + workspace switcher only.
-  2. **Secondary controls (collapsed by default):** all filter/state controls grouped in a single **Filters** tray.
+  1. **Primary row (always visible):** Orbit logo + workspace switcher + card-color edit palette.
+  2. **Secondary controls (collapsed by default):** filter/state controls grouped in a single **Filters** tray.
 - Keep canvas and chrome separation unchanged.
 - Add extra top-left safe spacing between chrome and first canvas card entry region.
 - Preserve existing filtering capabilities and state persistence behavior.
@@ -25,17 +25,19 @@ Reduce visual and interaction clutter in the top-left system-chrome region while
 - Accessibility/security deep-pass work beyond maintaining current parity.
 
 ## User-visible behavior
-1. The top-left region presents a calm, low-density default: logo + workspace selector only.
+1. The top-left region presents a calm default with always-visible edit essentials: logo + workspace selector + card-color edit palette.
 2. Filter and state controls are moved into a single **Filters** tray in the same chrome region.
 3. The Filters tray is closed on initial load by default.
-4. Opening Filters reveals the current control set (card color, hidden-state control, scope/state toggles such as All/Center/Periphery/Stale) without functional loss.
-5. Closing Filters does not reset or mutate active filter values.
-6. Canvas cards start lower/right enough to avoid visual collision with top-left chrome (target additional clearance: ~16–24px over current baseline).
+4. Opening Filters reveals the current filter/state control set (hidden-state control, scope/state toggles such as All/Center/Periphery/Stale) without functional loss.
+5. Card-color editing remains directly available even when Filters is closed.
+6. Closing Filters does not reset or mutate active filter values.
+7. Canvas cards start lower/right enough to avoid visual collision with top-left chrome (target additional clearance: ~16–24px over current baseline).
 
 ## Defaults and flows
-- **Default on load:** Filters tray closed.
-- **When user opens tray:** all controls available exactly as before.
+- **Default on load:** Filters tray closed; card-color edit palette remains visible.
+- **When user opens tray:** all filter/state controls are available exactly as before.
 - **When user changes filter values:** behavior and data results are unchanged from pre-packet logic.
+- **When user changes card color:** card edit behavior is unchanged from pre-packet logic.
 - **When user closes tray:** currently selected filters remain active and reflected in results.
 - **When viewport is constrained:** primary row remains visible; tray remains operable without overlapping card hit-targets.
 
@@ -53,13 +55,14 @@ Reduce visual and interaction clutter in the top-left system-chrome region while
 - Keep control identifiers/test hooks stable where possible to minimize regression risk.
 
 ## Acceptance criteria
-1. Top-left primary row shows only logo + workspace switcher in default state.
-2. Filter/state controls are accessible via a single Filters tray and are not permanently visible by default.
-3. Existing filter outcomes are behaviorally equivalent to pre-packet results for representative scenarios (including hidden and stale views).
-4. Closing/opening tray does not clear active filters.
-5. Canvas/chrome separation remains intact across supported viewport/zoom profiles; no overlap regression introduced.
-6. Additional top-left clearance is visually present and measurable within target delta (~16–24px vs. Packet 5 baseline).
-7. No coordinate model or migration work is triggered by this packet.
+1. Top-left primary row shows logo + workspace switcher + card-color edit palette in default state.
+2. Card-color control remains always visible and behaves as an edit palette (not as a filter).
+3. Filter/state controls are accessible via a single Filters tray and are not permanently visible by default.
+4. Existing filter outcomes are behaviorally equivalent to pre-packet results for representative scenarios (including hidden and stale views).
+5. Closing/opening tray does not clear active filters.
+6. Canvas/chrome separation remains intact across supported viewport/zoom profiles; no overlap regression introduced.
+7. Additional top-left clearance is visually present and measurable within target delta (~16–24px vs. Packet 5 baseline).
+8. No coordinate model or migration work is triggered by this packet.
 
 ## Verification checklist
 - Regression sweep includes:
