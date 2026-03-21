@@ -30,6 +30,14 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 2. **Top-right (Global state zone):** context + filter entry point and tray.
 3. **Edit boundary zone (separate from filters):** card-color edit palette remains always visible and never treated as filter state.
 
+## Hard zone contract (future-safe)
+- Zones are structural contracts, not visual suggestions.
+- Each zone must declare and preserve:
+  - explicit width budget behavior (preferred/min/overflow state),
+  - minimum interactive hit-target size parity with current control standards,
+  - deterministic overflow/degradation behavior.
+- No zone may borrow or merge semantic ownership from another zone (edit controls must not collapse into filter/global-state semantics).
+
 ## User-visible behavior
 1. Tagline is removed from chrome.
 2. Context and filter controls are presented in top-right chrome.
@@ -37,6 +45,7 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 4. Filters tray remains collapsible and controls only view-state/filter operations.
 5. Canvas gains visible vertical room versus Packet 6 baseline.
 6. No overlap between chrome controls and card hit regions across supported viewport/zoom profiles.
+7. No zone or chrome-state change may cause canvas-origin drift between app states (including tray open/close, active filter changes, and workspace switch).
 
 ## Defaults and flows
 - Default load: Filters tray closed.
@@ -47,10 +56,15 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 
 ## Future-space allocation constraints
 - Top-right global zone should reserve capacity for future strip-level controls (e.g., resurfacing acknowledgement/status surfaces) without forcing a third row in normal desktop widths.
-- If overflow occurs, degrade in this order:
-  1. compact spacing/icons,
-  2. collapse secondary global controls into tray,
-  3. never hide card-color edit palette behind Filters.
+- Reserve a dedicated **ephemeral slot** for transient status/ack surfaces.
+- Ephemeral surfaces must never consume or replace persistent control slots (Context + Filter entry remain protected).
+- Use one shared overflow arbiter for top-right zone decisions (no per-component independent collapse rules).
+- Overflow/compaction order is deterministic:
+  1. context label truncates,
+  2. compact spacing/icons,
+  3. collapse secondary global controls into tray,
+  4. never hide card-color edit palette behind Filters.
+- Persistent state indicators and ephemeral acknowledgments must remain visually distinct.
 
 ## Edge cases / exceptions
 - If non-default filters are active while tray is closed, filtered state still applies correctly.
@@ -64,7 +78,10 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 4. Filter behavior remains equivalent to pre-packet behavior.
 5. Canvas area is measurably increased vs Packet 6 baseline (documented by before/after screenshots or metrics).
 6. No chrome-card overlap or jitter regression introduced.
-7. Coordinate model remains untouched; no migration path triggered.
+7. No canvas-origin drift across UI states (tray open/close, filter state changes, workspace switch).
+8. Top-right overflow behavior follows one shared arbiter with deterministic compaction order (including context truncation before filter-entry compaction).
+9. Ephemeral status/ack surfaces do not consume persistent slots and remain visually distinct from persistent state indicators.
+10. Coordinate model remains untouched; no migration path triggered.
 
 ## Verification checklist
 - Compare before/after canvas dimensions (or effective visible card area) at representative desktop sizes.
