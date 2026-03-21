@@ -15,7 +15,7 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 - Preserve explicit functional separation between:
   - **Card color** (edit control; not a filter)
   - **Filters** (global view state controls)
-- Re-zone chrome so global context/filter controls move to top-right chrome.
+- Re-zone chrome so context/filter controls move into a dedicated canvas header rail above the canvas.
 - Keep canvas/chrome separation intact and recover additional canvas space.
 - Define future-safe top-right chrome capacity constraints for upcoming controls.
 
@@ -27,7 +27,9 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 
 ## Chrome zoning model
 1. **Top-left (Anchor zone):** logo + workspace switcher only.
-2. **Top-right (Global state zone):** context + filter entry point and tray.
+2. **Canvas header rail (field-associated chrome):** thin rail directly above canvas, aligned to canvas bounds.
+   - Left: context title.
+   - Right: filter entry/tray and future lightweight status/ack surfaces.
 3. **Edit boundary zone (separate from filters):** card-color edit palette remains always visible and never treated as filter state.
 
 ## Hard zone contract (future-safe)
@@ -40,12 +42,13 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 
 ## User-visible behavior
 1. Tagline is removed from chrome.
-2. Context and filter controls are presented in top-right chrome.
-3. Card-color control remains a distinct edit control and is not nested inside Filters.
-4. Filters tray remains collapsible and controls only view-state/filter operations.
-5. Canvas gains visible vertical room versus Packet 6 baseline.
-6. No overlap between chrome controls and card hit regions across supported viewport/zoom profiles.
-7. No zone or chrome-state change may cause canvas-origin drift between app states (including tray open/close, active filter changes, and workspace switch).
+2. Context title is presented in a dedicated canvas header rail (left side), tightly associated with canvas without entering canvas interaction space.
+3. Filter controls are presented on the right side of the same canvas header rail.
+4. Card-color control remains a distinct edit control and is not nested inside Filters.
+5. Filters tray remains collapsible and controls only view-state/filter operations.
+6. Canvas gains visible vertical room versus Packet 6 baseline.
+7. No overlap between chrome controls and card hit regions across supported viewport/zoom profiles.
+8. No zone or chrome-state change may cause canvas-origin drift between app states (including tray open/close, active filter changes, and workspace switch).
 
 ## Defaults and flows
 - Default load: Filters tray closed.
@@ -55,10 +58,10 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 - On constrained widths, chrome preserves zone priority and avoids collapsing edit+filter controls into ambiguous mixed groups.
 
 ## Future-space allocation constraints
-- Top-right global zone should reserve capacity for future strip-level controls (e.g., resurfacing acknowledgement/status surfaces) without forcing a third row in normal desktop widths.
+- The canvas header rail right-side global area should reserve capacity for future strip-level controls (e.g., resurfacing acknowledgement/status surfaces) without forcing a third row in normal desktop widths.
 - Reserve a dedicated **ephemeral slot** for transient status/ack surfaces.
 - Ephemeral surfaces must never consume or replace persistent control slots (Context + Filter entry remain protected).
-- Use one shared overflow arbiter for top-right zone decisions (no per-component independent collapse rules).
+- Use one shared overflow arbiter for canvas-header-rail global control decisions (no per-component independent collapse rules).
 - Overflow/compaction order is deterministic:
   1. context label truncates,
   2. compact spacing/icons,
@@ -73,7 +76,7 @@ Increase usable canvas area while preserving layout-invariant guarantees, by tig
 
 ## Acceptance criteria
 1. Tagline text is removed.
-2. Top-right chrome contains context + filter entry/tray controls.
+2. Canvas header rail contains context (left) and filter entry/tray controls (right).
 3. Card-color control is always visible, outside filter tray semantics, and behaviorally unchanged.
 4. Filter behavior remains equivalent to pre-packet behavior.
 5. Canvas area is measurably increased vs Packet 6 baseline (documented by before/after screenshots or metrics).
