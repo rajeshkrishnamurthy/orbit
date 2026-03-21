@@ -30,9 +30,8 @@
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
   let canvasViewportRect = null;
   let systemAckState = null;
-  let filtersTrayOpen = false;
-  let filtersToggle = null;
   let filtersPanel = null;
+  let filtersTray = null;
   let swatchRail = null;
 
   function syncCanvasViewportRect(){
@@ -65,29 +64,25 @@
   syncCanvasViewportRect();
 
   toolbar.innerHTML = '';
+  const colorsPanel = document.createElement('div');
+  colorsPanel.className = 'toolbar__colors';
   const cardColorLabel = document.createElement('span');
   cardColorLabel.className = 'toolbar__label';
   cardColorLabel.textContent = 'Card color';
   swatchRail = document.createElement('div');
   swatchRail.className = 'toolbar__swatches';
-  const filtersTray = document.createElement('div');
+  filtersTray = document.createElement('div');
   filtersTray.className = 'filters-tray';
-  filtersToggle = document.createElement('button');
-  filtersToggle.type = 'button';
-  filtersToggle.className = 'filters-tray__toggle';
-  filtersToggle.id = 'filters-toggle';
-  filtersToggle.setAttribute('aria-controls', 'filters-panel');
-  filtersToggle.setAttribute('aria-expanded', 'false');
-  filtersToggle.textContent = 'Filters';
   filtersPanel = document.createElement('div');
   filtersPanel.className = 'filters-tray__panel';
   filtersPanel.id = 'filters-panel';
-  filtersPanel.hidden = true;
+  filtersPanel.hidden = false;
   const filtersControls = document.createElement('div');
   filtersControls.className = 'filters-tray__controls';
   filtersPanel.appendChild(filtersControls);
-  filtersTray.append(filtersToggle, filtersPanel);
-  toolbar.append(cardColorLabel, swatchRail, filtersTray);
+  filtersTray.append(filtersPanel);
+  colorsPanel.append(cardColorLabel, swatchRail);
+  toolbar.append(colorsPanel, filtersTray);
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
   if (mode === 'focus' && contextNameEl) {
@@ -127,19 +122,6 @@
       refreshSwatches();
     };
     swatchRail.appendChild(b);
-  });
-
-  function setFiltersTrayOpen(nextOpen){
-    filtersTrayOpen = nextOpen;
-    if (!filtersPanel || !filtersToggle) return;
-    filtersPanel.hidden = !nextOpen;
-    filtersToggle.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-    syncCanvasViewportRect();
-    if (trayOpen) placeHiddenTray();
-  }
-
-  filtersToggle.addEventListener('click', () => {
-    setFiltersTrayOpen(!filtersTrayOpen);
   });
 
   const hiddenBtn = document.createElement('button');
@@ -201,6 +183,7 @@
     clearTimeout(systemAckState.timer);
     systemAckState.el.remove();
     systemAckState = null;
+    syncCanvasViewportRect();
   }
 
   function refreshSystemAckMode(el){
@@ -213,6 +196,7 @@
     clearSystemAck();
     systemAckArea.appendChild(el);
     refreshSystemAckMode(el);
+    syncCanvasViewportRect();
     systemAckState = {
       el,
       timer: durationMs > 0 ? setTimeout(() => {
@@ -338,21 +322,6 @@
 
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
-  ['all','center','periphery','stale'].forEach(name => {
-    const b = document.createElement('button');
-    b.className = 'lens-btn';
-    b.dataset.lens = name;
-    b.textContent = name[0].toUpperCase() + name.slice(1);
-    b.onclick = () => {
-      if (name === 'stale') {
-        setLensMode(lens === 'stale' ? 'all' : 'stale');
-        return;
-      }
-      setLensMode(name);
-    };
-    lensWrap.appendChild(b);
-  });
-  filtersControls.appendChild(lensWrap);
 
   const sliderWrap = document.createElement('div');
   sliderWrap.className = 'lens-slider-wrap';
@@ -367,7 +336,23 @@
   });
   lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
   lensSlider.addEventListener('pointerup', () => setTimeout(() => updateBoundaryCue(false), 380));
-  filtersControls.appendChild(sliderWrap);
+
+  ['all','center','periphery','stale'].forEach(name => {
+    const b = document.createElement('button');
+    b.className = 'lens-btn';
+    b.dataset.lens = name;
+    b.textContent = name[0].toUpperCase() + name.slice(1);
+    b.onclick = () => {
+      if (name === 'stale') {
+        setLensMode(lens === 'stale' ? 'all' : 'stale');
+        return;
+      }
+      setLensMode(name);
+    };
+    if (name === 'stale') lensWrap.appendChild(sliderWrap);
+    lensWrap.appendChild(b);
+  });
+  filtersControls.appendChild(lensWrap);
 
   const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
   const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
@@ -673,11 +658,14 @@
     const btn = document.getElementById('hidden-toggle');
     if (!btn) return;
     btn.textContent = `Hidden (${hiddenCount})`;
-    btn.hidden = hiddenCount <= 0;
-    if (filtersToggle) {
-      filtersToggle.dataset.hiddenCount = String(hiddenCount);
-      filtersToggle.setAttribute('aria-label', hiddenCount > 0 ? `Filters, ${hiddenCount} hidden cards` : 'Filters');
+    const shouldHide = hiddenCount <= 0;
+    btn.hidden = shouldHide;
+    if (shouldHide && trayOpen) {
+      closeHiddenTray();
+      return;
     }
+    if (trayOpen) placeHiddenTray();
+    syncCanvasViewportRect();
   }
 
   function renderLensButtons(){
@@ -1395,18 +1383,24 @@
   });
 
   document.addEventListener('pointerdown', (e) => {
-    if (!trayOpen) return;
-    const target = e.target;
-    if (!(target instanceof Node)) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
     if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm')) return;
+    if (target.closest('.sw')) {
+      closeHiddenTray();
+      return;
+    }
+    if (target.closest('.filters-tray')) return;
     if (surface.contains(target)) return;
     closeHiddenTray();
   });
 
   surface.addEventListener('pointerdown', (e) => {
-    const outsideTrayClick = trayOpen && !e.target.closest('.hidden-tray') && !e.target.closest('#hidden-toggle');
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    const outsideTrayClick = trayOpen && !target.closest('.hidden-tray') && !target.closest('#hidden-toggle');
     if (outsideTrayClick) closeHiddenTray();
-    if (e.target.closest('.pin') || e.target.closest('.toolbar') || e.target.closest('.hint') || e.target.closest('.undo-toast') || e.target.closest('.context-head') || e.target.closest('.hidden-tray') || e.target.closest('.context-confirm')) return;
+    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm')) return;
     if (outsideTrayClick) return;
     const rect = getCanvasViewportRect();
     const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
@@ -1419,6 +1413,7 @@
   renderHiddenButton();
   if (lens === 'stale') captureStaleLensSnapshot();
   renderLensButtons();
+  syncCanvasViewportRect();
   applyLens();
 
   window.addEventListener('resize', () => {

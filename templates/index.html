@@ -10,17 +10,22 @@
   <div class="wrap">
     <div class="layout-shell">
       <header class="system-strip" id="system-strip" data-region="system strip">
-        <div class="app-title">
-          <img class="app-title__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>
-          <h1>The Orbit</h1>
-        </div>
-        <p class="sub">For live priorities, not task lists</p>
-        <div class="system-strip__row">
-          <div class="context-head" data-region="context">
-            <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
-            <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
+        <div class="system-strip__top">
+          <div class="system-strip__left-stack">
+            <div class="app-title">
+              <img class="app-title__icon" src="/static/gravity-node.svg" alt="" aria-hidden="true"/>
+              <h1>The Orbit</h1>
+            </div>
+            <div class="context-head" data-region="context">
+              <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
+              <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
+            </div>
           </div>
-          <div class="toolbar" id="toolbar"></div>
+          <div class="system-strip__controls" data-zone="top-right chrome">
+            <div class="toolbar" id="toolbar"></div>
+          </div>
+        </div>
+        <div class="system-strip__ack-row">
           <div class="system-ack-stack" id="system-ack-stack" aria-live="polite" aria-atomic="true"></div>
         </div>
       </header>

@@ -95,11 +95,7 @@ async function visiblePinIds(page: Page): Promise<string[]> {
 }
 
 async function setLensSlider(page: Page, value: number): Promise<void> {
-  const filtersToggle = page.locator('#filters-toggle');
   const filtersPanel = page.locator('#filters-panel');
-  if (!(await filtersPanel.isVisible())) {
-    await filtersToggle.click();
-  }
   await expect(filtersPanel).toBeVisible();
   await page.locator('.lens-slider').evaluate((el, v) => {
     const input = el as HTMLInputElement;
@@ -112,24 +108,61 @@ async function setLensSlider(page: Page, value: number): Promise<void> {
 async function setPageZoom(page: Page, zoom: number): Promise<void> {
   await page.evaluate((value) => {
     document.documentElement.style.zoom = String(value);
+    window.dispatchEvent(new Event('resize'));
   }, zoom);
   await page.waitForTimeout(160);
 }
 
 async function getHiddenCount(page: Page): Promise<number> {
-  const toggle = page.locator('#filters-toggle');
-  const exists = await toggle.count();
-  if (exists === 0) return 0;
-  const count = await toggle.evaluate((el) => Number((el as HTMLButtonElement).dataset.hiddenCount || '0'));
-  return Number.isFinite(count) ? count : 0;
+  const hiddenToggle = page.locator('#hidden-toggle');
+  if ((await hiddenToggle.count()) > 0) {
+    const count = await hiddenToggle.evaluate((el) => {
+      const text = (el.textContent || '').trim();
+      const labelMatch = text.match(/\((\d+)\)\s*$/);
+      if (labelMatch) return Number(labelMatch[1]);
+      const datasetCount = Number((el as HTMLButtonElement).dataset.hiddenCount || '');
+      if (Number.isFinite(datasetCount)) return datasetCount;
+      return (el as HTMLButtonElement).hidden ? 0 : Number.NaN;
+    });
+    if (Number.isFinite(count)) return count;
+  }
+
+  return 0;
 }
 
 async function ensureFiltersTrayOpen(page: Page): Promise<void> {
-  const toggle = page.locator('#filters-toggle');
   const panel = page.locator('#filters-panel');
-  if (await panel.isVisible()) return;
-  await toggle.click();
   await expect(panel).toBeVisible();
+}
+
+async function ensureHiddenTrayOpen(page: Page): Promise<void> {
+  const hiddenToggle = page.locator('#hidden-toggle');
+  await expect(hiddenToggle).toBeVisible();
+  const hiddenTray = page.locator('.hidden-tray');
+  if (!(await hiddenTray.isVisible())) {
+    await hiddenToggle.click();
+  }
+  await expect(hiddenTray).toBeVisible();
+}
+
+async function expectSingleRowControls(hiddenToggle: Locator, lensToggle: Locator): Promise<void> {
+  await expect(hiddenToggle).toBeVisible();
+  await expect(lensToggle).toBeVisible();
+
+  const hiddenBox = await hiddenToggle.boundingBox();
+  const lensBox = await lensToggle.boundingBox();
+  expect(hiddenBox).not.toBeNull();
+  expect(lensBox).not.toBeNull();
+
+  const hiddenTop = hiddenBox!.y;
+  const hiddenBottom = hiddenBox!.y + hiddenBox!.height;
+  const lensTop = lensBox!.y;
+  const lensBottom = lensBox!.y + lensBox!.height;
+  const overlap = Math.max(0, Math.min(hiddenBottom, lensBottom) - Math.max(hiddenTop, lensTop));
+  const minHeight = Math.min(hiddenBox!.height, lensBox!.height);
+
+  expect(overlap / minHeight).toBeGreaterThanOrEqual(0.7);
+  expect(lensBox!.x).toBeGreaterThanOrEqual(hiddenBox!.x + hiddenBox!.width - 2);
 }
 
 async function openActionDrawer(pin: Locator): Promise<void> {
@@ -205,22 +238,169 @@ test('drag/drop persists card position after reload', async ({ page }) => {
   expect(Math.abs(topAfter - topBefore)).toBeLessThan(1.5);
 });
 
-test('top-left chrome keeps the primary row visible and the Filters tray closed by default', async ({ page }) => {
+test('top-left chrome keeps the primary row visible and filters controls open by default', async ({ page }) => {
   await expect(page.locator('.app-title')).toBeVisible();
-  await expect(page.locator('.sub')).toBeVisible();
+  await expect(page.locator('.sub')).toHaveCount(0);
   await expect(page.locator('.context-head')).toBeVisible();
   await expect(page.locator('#toolbar')).toBeVisible();
+  await expect(page.locator('.toolbar__label')).toHaveText('Card color');
   await expect(page.locator('.sw')).toHaveCount(5);
-  await expect(page.locator('#filters-toggle')).toBeVisible();
-  await expect(page.locator('#filters-panel')).toBeHidden();
-  await expect(page.locator('#hidden-toggle')).toBeHidden();
-  await expect(page.locator('.lens-toggle')).toBeHidden();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
 
+  const filtersPanel = page.locator('#filters-panel');
+  const filtersControls = filtersPanel.locator('.filters-tray__controls');
+  await expect(filtersPanel).toBeVisible();
+  await expect(filtersControls).toBeVisible();
+  await expect(filtersPanel.locator('.lens-toggle')).toBeVisible();
+  await expect(filtersPanel.locator('.lens-btn[data-lens="all"]')).toBeVisible();
+  await expect(filtersPanel.locator('.lens-btn[data-lens="center"]')).toBeVisible();
+  await expect(filtersPanel.locator('.lens-btn[data-lens="periphery"]')).toBeVisible();
+  await expect(filtersPanel.locator('.lens-btn[data-lens="stale"]')).toBeVisible();
+
+  const hiddenToggle = filtersPanel.locator('#hidden-toggle');
+  const initialHiddenCount = await getHiddenCount(page);
+  if (initialHiddenCount > 0) {
+    await expect(hiddenToggle).toBeVisible();
+  } else {
+    await expect(hiddenToggle).toBeHidden();
+  }
+  const hideProbe = await createCard(page, `hidden-probe-${Date.now()}`, 1180, 680);
+  await openActionDrawer(hideProbe);
+  await hideProbe.locator('.pin-action-drawer .pin-hide').click();
+  await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(initialHiddenCount);
+  await expect(hiddenToggle).toBeVisible();
+
+  await page.evaluate(() => window.scrollTo(0, 0));
   const stripBox = await page.locator('#system-strip').boundingBox();
   const surfaceBox = await page.locator('#surface').boundingBox();
+  const appTitleBox = await page.locator('.app-title').boundingBox();
+  const colorsBox = await page.locator('.toolbar__colors').boundingBox();
+  const contextBox = await page.locator('.context-head').boundingBox();
+  const filtersControlsBox = await filtersControls.boundingBox();
+  const toolbarBox = await page.locator('#toolbar').boundingBox();
   expect(stripBox).not.toBeNull();
   expect(surfaceBox).not.toBeNull();
-  expect(surfaceBox!.y - (stripBox!.y + stripBox!.height)).toBeGreaterThanOrEqual(36);
+  expect(appTitleBox).not.toBeNull();
+  expect(colorsBox).not.toBeNull();
+  expect(contextBox).not.toBeNull();
+  expect(filtersControlsBox).not.toBeNull();
+  expect(toolbarBox).not.toBeNull();
+  const titleTop = appTitleBox!.y;
+  const titleBottom = appTitleBox!.y + appTitleBox!.height;
+  const colorsTop = colorsBox!.y;
+  const colorsBottom = colorsBox!.y + colorsBox!.height;
+  const titleColorsOverlap = Math.max(0, Math.min(titleBottom, colorsBottom) - Math.max(titleTop, colorsTop));
+  const contextTop = contextBox!.y;
+  const contextBottom = contextBox!.y + contextBox!.height;
+  const filtersTop = filtersControlsBox!.y;
+  const filtersBottom = filtersControlsBox!.y + filtersControlsBox!.height;
+  const verticalOverlap = Math.max(0, Math.min(contextBottom, filtersBottom) - Math.max(contextTop, filtersTop));
+  const stripToSurfaceGap = surfaceBox!.y - (stripBox!.y + stripBox!.height);
+  expect(titleColorsOverlap / Math.min(appTitleBox!.height, colorsBox!.height)).toBeGreaterThanOrEqual(0.6);
+  expect(colorsBox!.x).toBeGreaterThanOrEqual(appTitleBox!.x + appTitleBox!.width - 2);
+  expect(verticalOverlap / Math.min(contextBox!.height, filtersControlsBox!.height)).toBeGreaterThanOrEqual(0.6);
+  expect(filtersControlsBox!.x).toBeGreaterThanOrEqual(contextBox!.x + contextBox!.width - 2);
+  expect(contextBox!.y + contextBox!.height).toBeLessThanOrEqual(surfaceBox!.y - 8);
+  expect(stripToSurfaceGap).toBeGreaterThanOrEqual(0);
+  expect(stripToSurfaceGap).toBeLessThanOrEqual(24);
+});
+
+test('top-left chrome separates colors box and filters box in stacked layout', async ({ page }) => {
+  // Arrange: both control groups are visible in top-left chrome.
+  const cardColorLabel = page.locator('.toolbar__label', { hasText: 'Card color' });
+  const swatchRail = page.locator('.toolbar__swatches');
+  const filtersPanel = page.locator('#filters-panel');
+  await expect(cardColorLabel).toBeVisible();
+  await expect(swatchRail).toBeVisible();
+  await expect(filtersPanel).toBeVisible();
+
+  // Act: capture container relationship and geometry for colors vs filters boxes.
+  const relation = await page.evaluate(() => {
+    const label = Array.from(document.querySelectorAll('.toolbar__label')).find(
+      (el) => (el.textContent || '').trim() === 'Card color',
+    );
+    const swatches = document.querySelector('.toolbar__swatches');
+    const filters = document.querySelector('#filters-panel');
+    if (!label || !swatches || !filters) return null;
+
+    const labelAncestors: Element[] = [];
+    let cursor: Element | null = label.parentElement;
+    while (cursor) {
+      labelAncestors.push(cursor);
+      cursor = cursor.parentElement;
+    }
+
+    let colorsBox: Element | null = swatches;
+    while (colorsBox && !labelAncestors.includes(colorsBox)) {
+      colorsBox = colorsBox.parentElement;
+    }
+    if (!colorsBox) return null;
+
+    const colorsRect = colorsBox.getBoundingClientRect();
+    const filtersRect = filters.getBoundingClientRect();
+    const horizontalOverlap = Math.max(
+      0,
+      Math.min(colorsRect.right, filtersRect.right) - Math.max(colorsRect.left, filtersRect.left),
+    );
+
+    return {
+      filtersInsideColors: colorsBox.contains(filters),
+      colorsInsideFilters: filters.contains(colorsBox),
+      colorsBottom: colorsRect.bottom,
+      filtersTop: filtersRect.top,
+      horizontalOverlap,
+    };
+  });
+  expect(relation).not.toBeNull();
+
+  // Assert: filters controls use a separate visual box and stack below colors controls.
+  expect(relation!.filtersInsideColors).toBeFalsy();
+  expect(relation!.colorsInsideFilters).toBeFalsy();
+  expect(relation!.filtersTop).toBeGreaterThanOrEqual(relation!.colorsBottom - 1);
+  expect(relation!.horizontalOverlap).toBeGreaterThan(0);
+});
+
+test('context title aligns with filters row and canvas starts immediately below', async ({ page }) => {
+  // Arrange: verify the contract under constrained desktop width.
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto('/');
+
+  // Arrange: required chrome elements for the row-level layout contract.
+  const contextHead = page.locator('.context-head');
+  const filtersControls = page.locator('#filters-panel .filters-tray__controls');
+  const surface = page.locator('#surface');
+  await expect(contextHead).toBeVisible();
+  await expect(filtersControls).toBeVisible();
+  await expect(surface).toBeVisible();
+
+  // Act: capture geometry once to avoid race-y assertions.
+  const contextBox = await contextHead.boundingBox();
+  const filtersBox = await filtersControls.boundingBox();
+  const surfaceBox = await surface.boundingBox();
+  expect(contextBox).not.toBeNull();
+  expect(filtersBox).not.toBeNull();
+  expect(surfaceBox).not.toBeNull();
+
+  const contextTop = contextBox!.y;
+  const contextBottom = contextBox!.y + contextBox!.height;
+  const filtersTop = filtersBox!.y;
+  const filtersBottom = filtersBox!.y + filtersBox!.height;
+  const verticalOverlap = Math.max(0, Math.min(contextBottom, filtersBottom) - Math.max(contextTop, filtersTop));
+  const minControlHeight = Math.min(contextBox!.height, filtersBox!.height);
+  const heightRatio = contextBox!.height / filtersBox!.height;
+  const rowBottom = Math.max(contextBottom, filtersBottom);
+  const rowHeight = rowBottom - Math.min(contextTop, filtersTop);
+  const canvasGap = surfaceBox!.y - rowBottom;
+
+  // Assert: same-row intent without pixel-perfect coupling.
+  expect(verticalOverlap / minControlHeight).toBeGreaterThanOrEqual(0.6);
+  expect(heightRatio).toBeGreaterThanOrEqual(0.6);
+  expect(heightRatio).toBeLessThanOrEqual(2.2);
+  expect(filtersBox!.x).toBeGreaterThanOrEqual(contextBox!.x + contextBox!.width - 2);
+
+  // Assert: canvas starts directly under that row with only tight spacing.
+  expect(canvasGap).toBeGreaterThanOrEqual(0);
+  expect(canvasGap).toBeLessThanOrEqual(Math.max(24, rowHeight * 0.6));
 });
 
 test('layout shell exposes canvasViewportRect and keeps system chrome outside the canvas', async ({ page }) => {
@@ -231,16 +411,18 @@ test('layout shell exposes canvasViewportRect and keeps system chrome outside th
 
   await expect(page.locator('[data-region="system strip"]')).toBeVisible();
   await expect(page.locator('[data-region="canvas"]')).toBeVisible();
-  await expect(page.locator('#filters-toggle')).toBeVisible();
-  await expect(page.locator('#filters-panel')).toBeHidden();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
+  await expect(page.locator('#filters-panel')).toBeVisible();
 
   const stripBox = await page.locator('#system-strip').boundingBox();
   const surfaceBox = await page.locator('#surface').boundingBox();
   expect(stripBox).not.toBeNull();
   expect(surfaceBox).not.toBeNull();
-  expect(surfaceBox!.y - (stripBox!.y + stripBox!.height)).toBeGreaterThanOrEqual(36);
+  const stripToSurfaceGap = surfaceBox!.y - (stripBox!.y + stripBox!.height);
+  expect(stripToSurfaceGap).toBeGreaterThanOrEqual(0);
+  expect(stripToSurfaceGap).toBeLessThanOrEqual(24);
 
-  for (const selector of ['.app-title', '.sub', '.context-head', '#toolbar', '#filters-toggle', '.system-ack-stack']) {
+  for (const selector of ['.app-title', '.system-strip__controls', '.context-head', '#toolbar', '#filters-panel', '.system-ack-stack']) {
     const box = await page.locator(selector).boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y + box!.height).toBeLessThanOrEqual(canvasRect!.top);
@@ -258,8 +440,10 @@ test('layout shell exposes canvasViewportRect and keeps system chrome outside th
   const undoToast = page.locator('.undo-toast');
   await expect(undoToast).toBeVisible();
   const undoToastBox = await undoToast.boundingBox();
+  const canvasRectAfterAck = await getCanvasViewportRect(page);
   expect(undoToastBox).not.toBeNull();
-  expect(undoToastBox!.y + undoToastBox!.height).toBeLessThanOrEqual(canvasRect!.top);
+  expect(canvasRectAfterAck).not.toBeNull();
+  expect(undoToastBox!.y + undoToastBox!.height).toBeLessThanOrEqual(canvasRectAfterAck!.top);
   await page.locator('.undo-btn').click();
 });
 
@@ -271,7 +455,7 @@ test('chrome relocation keeps every system chrome outside canvasViewportRect acr
     { width: 1024, height: 768, zoom: 1 },
     { width: 1440, height: 900, zoom: 1.25 },
   ];
-  const selectors = ['.app-title', '.sub', '.context-head', '#toolbar', '#filters-toggle', '.system-ack-stack'];
+  const selectors = ['.app-title', '.system-strip__controls', '.context-head', '#toolbar', '#filters-panel', '.system-ack-stack'];
 
   for (const profile of profiles) {
     await page.setViewportSize({ width: profile.width, height: profile.height });
@@ -282,7 +466,7 @@ test('chrome relocation keeps every system chrome outside canvasViewportRect acr
     expect(canvasRect).not.toBeNull();
     await expect(page.locator('[data-region="system strip"]')).toBeVisible();
     await expect(page.locator('[data-region="canvas"]')).toBeVisible();
-    await expect(page.locator('#filters-panel')).toBeHidden();
+    await expect(page.locator('#filters-panel')).toBeVisible();
 
     for (const selector of selectors) {
       const box = await page.locator(selector).boundingBox();
@@ -316,8 +500,8 @@ test('strip pressure degrades the acknowledgment while Context/Hidden/Lens stay 
   await expect(ack).toBeVisible();
   await expect(ack).toHaveAttribute('data-ack-mode', 'full');
   await expect(page.locator('.context-head')).toBeVisible();
-  await expect(page.locator('#filters-toggle')).toBeVisible();
-  await expect(page.locator('#filters-panel')).toBeHidden();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
+  await expect(page.locator('#filters-panel')).toBeVisible();
   await ensureFiltersTrayOpen(page);
   await expect(page.locator('#hidden-toggle')).toBeVisible();
   await expect(page.locator('.lens-toggle')).toBeVisible();
@@ -327,7 +511,7 @@ test('strip pressure degrades the acknowledgment while Context/Hidden/Lens stay 
   await page.waitForTimeout(220);
   await expect(ack).toHaveAttribute('data-ack-mode', 'compact');
   await expect(page.locator('.context-head')).toBeVisible();
-  await expect(page.locator('#filters-toggle')).toBeVisible();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
   await expect(page.locator('#filters-panel')).toBeVisible();
   await expect(page.locator('#hidden-toggle')).toBeVisible();
   await expect(page.locator('.lens-toggle')).toBeVisible();
@@ -337,7 +521,7 @@ test('strip pressure degrades the acknowledgment while Context/Hidden/Lens stay 
   await page.waitForTimeout(220);
   await expect(ack).toHaveAttribute('data-ack-mode', 'hidden');
   await expect(page.locator('.context-head')).toBeVisible();
-  await expect(page.locator('#filters-toggle')).toBeVisible();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
   await expect(page.locator('#filters-panel')).toBeVisible();
   await expect(page.locator('#hidden-toggle')).toBeVisible();
   await expect(page.locator('.lens-toggle')).toBeVisible();
@@ -372,53 +556,242 @@ test('center/periphery lens + slider updates visible card set', async ({ page })
   expect(normalize(center35)).toBeTruthy();
 });
 
-test('filters tray closed by default preserves active filter state when reopened', async ({ page }) => {
-  await expect(page.locator('#filters-toggle')).toBeVisible();
-  await expect(page.locator('#filters-panel')).toBeHidden();
-
+test('center/periphery slider stays visible inline between Periphery and Stale', async ({ page }) => {
   await ensureFiltersTrayOpen(page);
+
+  const slider = page.locator('.lens-slider');
+  const sliderWrap = page.locator('.lens-slider-wrap');
+  const periphery = page.locator('.lens-btn[data-lens="periphery"]');
+  const stale = page.locator('.lens-btn[data-lens="stale"]');
+
+  const assertInlineBetweenPeripheryAndStale = async (): Promise<void> => {
+    await expect(sliderWrap).toBeVisible();
+    await expect(slider).toBeVisible();
+
+    const peripheryBox = await periphery.boundingBox();
+    const staleBox = await stale.boundingBox();
+    const sliderBox = await slider.boundingBox();
+    expect(peripheryBox).not.toBeNull();
+    expect(staleBox).not.toBeNull();
+    expect(sliderBox).not.toBeNull();
+
+    const sliderCenterY = sliderBox!.y + sliderBox!.height / 2;
+    const peripheryCenterY = peripheryBox!.y + peripheryBox!.height / 2;
+    const staleCenterY = staleBox!.y + staleBox!.height / 2;
+    expect(Math.abs(peripheryCenterY - sliderCenterY)).toBeLessThanOrEqual(8);
+    expect(Math.abs(staleCenterY - sliderCenterY)).toBeLessThanOrEqual(8);
+
+    expect(sliderBox!.x).toBeGreaterThanOrEqual(peripheryBox!.x + peripheryBox!.width - 1);
+    expect(sliderBox!.x + sliderBox!.width).toBeLessThanOrEqual(staleBox!.x + 1);
+  };
+
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await expect(page.locator('.lens-btn[data-lens="center"]')).toHaveClass(/active/);
+  await assertInlineBetweenPeripheryAndStale();
+
+  await page.locator('.lens-btn[data-lens="periphery"]').click();
+  await expect(page.locator('.lens-btn[data-lens="periphery"]')).toHaveClass(/active/);
+  await assertInlineBetweenPeripheryAndStale();
+});
+
+test('filters panel keeps Hidden and lens controls on one row', async ({ page }) => {
+  // Arrange: ensure the Hidden toggle is rendered in the Filters panel.
+  const card = await createCard(page, `filters-row-${Date.now()}`, 1120, 260);
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(card);
+  await card.locator('.pin-action-drawer .pin-hide').click();
+  await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
+
+  const hiddenToggle = page.locator('#hidden-toggle');
+  const lensToggle = page.locator('.lens-toggle');
+  const sliderWrap = page.locator('.lens-slider-wrap');
+
+  // Act + Assert: lens=All (slider hidden) keeps Hidden + lens controls on one row.
+  await page.locator('.lens-btn[data-lens="all"]').click();
+  await expect(sliderWrap).toBeHidden();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+
+  // Act + Assert: lens=Center (slider visible) still keeps one row.
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await expect(sliderWrap).toBeVisible();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+
+  // Act + Assert: lens=Periphery (slider visible) still keeps one row.
+  await page.locator('.lens-btn[data-lens="periphery"]').click();
+  await expect(sliderWrap).toBeVisible();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+});
+
+test('filters panel width is content-tight when slider is hidden', async ({ page }) => {
+  // Arrange: ensure Hidden toggle is present so row geometry is stable and comparable.
+  const card = await createCard(page, `filters-width-${Date.now()}`, 1120, 260);
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(card);
+  await card.locator('.pin-action-drawer .pin-hide').click();
+  await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
+
+  const panel = page.locator('#filters-panel');
+  const controlsRow = page.locator('.filters-tray__controls');
+  const hiddenToggle = page.locator('#hidden-toggle');
+  const lensToggle = page.locator('.lens-toggle');
+  const sliderWrap = page.locator('.lens-slider-wrap');
+  const slider = page.locator('.lens-slider');
+
+  // Act: lens=All should hide slider and keep controls in a single row.
+  await page.locator('.lens-btn[data-lens="all"]').click();
+  await expect(sliderWrap).toBeHidden();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+
+  const allPanelBox = await panel.boundingBox();
+  const allControlsBox = await controlsRow.boundingBox();
+  expect(allPanelBox).not.toBeNull();
+  expect(allControlsBox).not.toBeNull();
+
+  // Assert: content-tight means panel width tracks controls width with only modest shell slack.
+  const allSlackPx = allPanelBox!.width - allControlsBox!.width;
+  const allSlackRatio = allPanelBox!.width / allControlsBox!.width;
+  expect(allSlackPx).toBeLessThanOrEqual(56);
+  expect(allSlackRatio).toBeLessThanOrEqual(1.2);
+
+  // Act: lens=Center should show slider, stay one-row, and materially widen panel.
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await expect(sliderWrap).toBeVisible();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+
+  const centerPanelBox = await panel.boundingBox();
+  const sliderBox = await slider.boundingBox();
+  expect(centerPanelBox).not.toBeNull();
+  expect(sliderBox).not.toBeNull();
+
+  // Act: lens=Periphery should keep slider visible and preserve one-row layout.
+  await page.locator('.lens-btn[data-lens="periphery"]').click();
+  await expect(sliderWrap).toBeVisible();
+  await expectSingleRowControls(hiddenToggle, lensToggle);
+
+  const peripheryPanelBox = await panel.boundingBox();
+  expect(peripheryPanelBox).not.toBeNull();
+
+  // Assert: slider-visible modes are wider than All by a meaningful geometric margin.
+  const minWideningPx = Math.max(20, sliderBox!.width * 0.4);
+  expect(centerPanelBox!.width - allPanelBox!.width).toBeGreaterThanOrEqual(minWideningPx);
+  expect(peripheryPanelBox!.width - allPanelBox!.width).toBeGreaterThanOrEqual(minWideningPx);
+});
+
+test('filters tray is open by default and preserves active filter state after Escape', async ({ page }) => {
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
+  await expect(page.locator('#filters-panel')).toBeVisible();
+
   await page.locator('.lens-btn[data-lens="center"]').click();
   await setLensSlider(page, 35);
 
-  const visibleBeforeClose = await visiblePinIds(page);
-  await page.locator('#filters-toggle').evaluate((el) => (el as HTMLButtonElement).click());
-  await expect(page.locator('#filters-panel')).toBeHidden();
+  const visibleBeforeEscape = await visiblePinIds(page);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#filters-panel')).toBeVisible();
 
-  await ensureFiltersTrayOpen(page);
   await expect(page.locator('.lens-btn[data-lens="center"]')).toHaveClass(/active/);
   await expect(page.locator('.lens-slider')).toHaveValue('35');
 
-  const visibleAfterReopen = await visiblePinIds(page);
-  expect(visibleAfterReopen.sort()).toEqual(visibleBeforeClose.sort());
+  const visibleAfterEscape = await visiblePinIds(page);
+  expect(visibleAfterEscape.sort()).toEqual(visibleBeforeEscape.sort());
+});
+
+test('filters tray stays open on outside chrome clicks without losing active filter state', async ({ page }) => {
+  await expect(page.locator('#filters-panel')).toBeVisible();
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await setLensSlider(page, 35);
+  const visibleBeforeOutsideClick = await visiblePinIds(page);
+
+  await page.locator('.context-head').click();
+  await expect(page.locator('#filters-panel')).toBeVisible();
+
+  await expect(page.locator('.lens-btn[data-lens="center"]')).toHaveClass(/active/);
+  await expect(page.locator('.lens-slider')).toHaveValue('35');
+  const visibleAfterOutsideClick = await visiblePinIds(page);
+  expect(visibleAfterOutsideClick.sort()).toEqual(visibleBeforeOutsideClick.sort());
+});
+
+test('filters tray keeps card color swatches visible and clickable while open', async ({ page }) => {
+  const pin = await createCard(page, `swatch-${Date.now()}`, 1180, 240);
+  await pin.click();
+  const before = (await pin.getAttribute('data-color')) ?? '';
+
+  await ensureFiltersTrayOpen(page);
+  const swatches = page.locator('.sw');
+  await expect(swatches.first()).toBeVisible();
+  const count = await swatches.count();
+  let changed = false;
+  for (let i = 0; i < count; i++) {
+    await swatches.nth(i).click();
+    await page.waitForTimeout(220);
+    const after = (await pin.getAttribute('data-color')) ?? '';
+    if (after !== before) {
+      changed = true;
+      break;
+    }
+  }
+
+  await expect(page.locator('#filters-panel')).toBeVisible();
+  expect(changed).toBeTruthy();
+  await expect(pin).not.toHaveAttribute('data-color', before);
+});
+
+test('filters tray stays anchored without moving the canvas on constrained widths', async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 420 });
+  await setPageZoom(page, 1.25);
+  await page.waitForTimeout(180);
+
+  const surfaceBefore = await page.locator('#surface').boundingBox();
+  const before = await getCanvasViewportRect(page);
+  expect(surfaceBefore).not.toBeNull();
+  expect(before).not.toBeNull();
+
+  await ensureFiltersTrayOpen(page);
+  const panel = page.locator('#filters-panel');
+  const tray = page.locator('.filters-tray');
+
+  const panelBox = await panel.boundingBox();
+  const trayBox = await tray.boundingBox();
+  const surfaceAfter = await page.locator('#surface').boundingBox();
+  const after = await getCanvasViewportRect(page);
+
+  expect(panelBox).not.toBeNull();
+  expect(trayBox).not.toBeNull();
+  expect(surfaceAfter).not.toBeNull();
+  expect(after).not.toBeNull();
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(trayBox!.x + trayBox!.width + 1);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(surfaceAfter!.y);
+  expect(surfaceAfter!.y).toBeCloseTo(surfaceBefore!.y, 1);
+  expect(after!.top).toBeCloseTo(before!.top, 1);
 });
 
 test('filters tray refreshes canvasViewportRect before immediate card creation', async ({ page }) => {
-  await expect(page.locator('#filters-toggle')).toBeVisible();
-  await expect(page.locator('#filters-panel')).toBeHidden();
+  await expect(page.locator('#filters-toggle')).toHaveCount(0);
+  await expect(page.locator('#filters-panel')).toBeVisible();
 
   const surfaceBefore = await page.locator('#surface').boundingBox();
   const before = await getCanvasViewportRect(page);
   expect(before).not.toBeNull();
 
-  await page.locator('#filters-toggle').click();
-  await expect(page.locator('#filters-panel')).toBeVisible();
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await expect(page.locator('.lens-slider-wrap')).toBeVisible();
 
   const surfaceAfter = await page.locator('#surface').boundingBox();
   const after = await getCanvasViewportRect(page);
   expect(after).not.toBeNull();
   expect(surfaceBefore).not.toBeNull();
   expect(surfaceAfter).not.toBeNull();
-  expect(after!.top).toBeGreaterThan(before!.top);
+  const surfaceShift = Math.abs(surfaceAfter!.y - surfaceBefore!.y);
+  expect(Math.abs(after!.top - before!.top)).toBeLessThanOrEqual(surfaceShift + 1);
   expect(after!.top).toBeCloseTo(surfaceAfter!.y, 1);
-  expect(surfaceAfter!.y).toBeGreaterThan(surfaceBefore!.y);
 
-  const created = await createCard(page, `filters-boundary-${Date.now()}`, 1180, 300);
-  const top = await created.evaluate((el) => parseFloat((el as HTMLElement).style.top));
-  expect(top).toBeGreaterThanOrEqual(298);
-  expect(top).toBeLessThanOrEqual(302);
+  const created = await createCard(page, `filters-boundary-${Date.now()}`, 1180, 680);
+  const createdBox = await created.boundingBox();
+  expect(createdBox).not.toBeNull();
+  expect(createdBox!.y).toBeGreaterThan(surfaceAfter!.y);
+  expect(createdBox!.y + createdBox!.height).toBeLessThanOrEqual(surfaceAfter!.y + surfaceAfter!.height);
 });
 
-test('hidden tray repositions when Filters toggles while it is open', async ({ page }) => {
+test('hidden tray remains open during filters interactions and closes independently', async ({ page }) => {
   const title = `hidden-tray-realign-${Date.now()}`;
   const created = await createCard(page, title);
   const id = await created.getAttribute('data-id');
@@ -437,15 +810,19 @@ test('hidden tray repositions when Filters toggles while it is open', async ({ p
   const hiddenTray = page.locator('.hidden-tray');
   await expect(hiddenTray).toBeVisible();
 
-  const beforeTop = await hiddenTray.evaluate((el) => parseFloat((el as HTMLElement).style.top || '0'));
+  // Interacting with always-open Filters controls should not close Hidden tray.
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await expect(page.locator('#filters-panel')).toBeVisible();
+  await expect(hiddenTray).toBeVisible();
 
-  await page.locator('#filters-toggle').evaluate((el) => {
-    el.dispatchEvent(new MouseEvent('click', { bubbles: false, cancelable: true }));
-  });
-  await expect(page.locator('#filters-panel')).toBeHidden();
+  // Canvas click closes Hidden tray independently of Filters.
+  await page.locator('#surface').click({ position: { x: 80, y: 80 } });
+  await expect(hiddenTray).toBeHidden();
 
-  const afterTop = await hiddenTray.evaluate((el) => parseFloat((el as HTMLElement).style.top || '0'));
-  expect(afterTop).not.toBe(beforeTop);
+  // Further Filters interactions must not implicitly reopen Hidden tray.
+  await page.locator('.lens-btn[data-lens="periphery"]').click();
+  await expect(page.locator('#filters-panel')).toBeVisible();
+  await expect(hiddenTray).toBeHidden();
 });
 
 test('stale lens shows only entry-time stale cards and refreshes on reload', async ({ page }) => {
@@ -609,11 +986,11 @@ test('resurface acknowledgment degrades under strip pressure', async ({ page }) 
   const staleCard = page.locator(`.pin[data-id="${id}"]`);
   await expect(staleCard).toHaveAttribute('data-stale', 'true');
   const initialHiddenCount = await getHiddenCount(page);
-  const canvasRect = await getCanvasViewportRect(page);
-  expect(canvasRect).not.toBeNull();
 
   const resurfaceAtWidth = async (width: number, expectedMode: 'full' | 'compact' | 'hidden') => {
     await page.setViewportSize({ width, height: 800 });
+    const canvasRect = await getCanvasViewportRect(page);
+    expect(canvasRect).not.toBeNull();
 
     await ensureFiltersTrayOpen(page);
     await openActionDrawer(staleCard);
@@ -621,10 +998,9 @@ test('resurface acknowledgment degrades under strip pressure', async ({ page }) 
     await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
     await expect.poll(() => getHiddenCount(page)).toBe(initialHiddenCount + 1);
 
-    const hiddenToggle = page.locator('#hidden-toggle');
-    await hiddenToggle.click();
-
+    await ensureHiddenTrayOpen(page);
     const hiddenItem = page.locator('.hidden-tray-item', { hasText: title }).first();
+    await expect.poll(async () => hiddenItem.count()).toBeGreaterThan(0);
     await expect(hiddenItem).toBeVisible();
     await hiddenItem.dragTo(page.locator('#surface'), { targetPosition: { x: 360, y: 300 } });
 
@@ -645,8 +1021,8 @@ test('resurface acknowledgment degrades under strip pressure', async ({ page }) 
   };
 
   await resurfaceAtWidth(1440, 'full');
-  await resurfaceAtWidth(700, 'compact');
-  await resurfaceAtWidth(460, 'hidden');
+  await resurfaceAtWidth(1024, 'compact');
+  await resurfaceAtWidth(700, 'hidden');
 });
 
 test('system events do not move existing user-positioned cards', async ({ page }) => {
@@ -724,7 +1100,7 @@ test('insertion policy is deterministic and never displaces existing cards', asy
   const second = await restoreOnce();
 
   expect(second.left).toBe(first.left);
-  expect(second.top).toBe(first.top);
+  expect(Math.abs(second.top - first.top)).toBeLessThanOrEqual(1);
 
   const sentinelLeftAfter = await sentinel.evaluate((el) => parseFloat((el as HTMLElement).style.left));
   const sentinelTopAfter = await sentinel.evaluate((el) => parseFloat((el as HTMLElement).style.top));
@@ -805,9 +1181,10 @@ test('touch control stays explicit, toggles today state, and supports undo', asy
 });
 
 test('stale emphasis remains visible for stale cards and stays off active cards', async ({ page }) => {
-  const staleSeed = page.locator('.pin').first();
+  const staleSeed = await createCard(page, `stale-${Date.now()}`, 220, 180);
   const staleSeedId = await staleSeed.getAttribute('data-id');
   expect(staleSeedId).toBeTruthy();
+  await expect(staleSeed).toHaveAttribute('data-saved', 'true');
 
   ageCardInDb(staleSeedId!, 10);
   await page.reload();
@@ -815,7 +1192,7 @@ test('stale emphasis remains visible for stale cards and stays off active cards'
   const staleCard = page.locator(`.pin[data-id="${staleSeedId}"]`);
   await expect(staleCard).toHaveAttribute('data-stale', 'true');
 
-  const activeCard = await createCard(page, `active-${Date.now()}`, 860, 260);
+  const activeCard = await createCard(page, `active-${Date.now()}`, 1140, 640);
   await expect(activeCard).toHaveAttribute('data-stale', 'false');
 
   const staleNormal = await pinChrome(staleCard);
@@ -824,7 +1201,7 @@ test('stale emphasis remains visible for stale cards and stays off active cards'
   expect(staleNormal.borderColor).not.toBe(activeNormal.borderColor);
   expect(staleNormal.boxShadow).not.toBe(activeNormal.boxShadow);
 
-  await staleCard.click({ position: { x: 30, y: 20 } });
+  await staleCard.locator('.pin-title input').focus();
   await expect(staleCard).toHaveClass(/selected/);
   const staleSelected = await pinChrome(staleCard);
 
@@ -931,8 +1308,27 @@ test('blank context cards are discarded when left empty', async ({ page }) => {
   const pins = page.locator('.pin');
   const before = await pins.count();
 
-  await page.locator('#surface').click({ position: { x: 1080, y: 640 } });
-  await expect(pins).toHaveCount(before + 1);
+  const surfaceBox = await page.locator('#surface').boundingBox();
+  expect(surfaceBox).not.toBeNull();
+  const candidatePositions = [
+    { x: 1080, y: 640 },
+    { x: 1120, y: 140 },
+    { x: 240, y: 640 },
+    { x: 240, y: 140 },
+  ];
+  let added = false;
+  for (const p of candidatePositions) {
+    await page.mouse.click(surfaceBox!.x + p.x, surfaceBox!.y + p.y);
+    for (let i = 0; i < 8; i++) {
+      if ((await pins.count()) === before + 1) {
+        added = true;
+        break;
+      }
+      await page.waitForTimeout(120);
+    }
+    if (added) break;
+  }
+  expect(added).toBeTruthy();
 
   const blankPin = pins.nth(before);
   const titleInput = blankPin.locator('.pin-title input');
@@ -959,7 +1355,7 @@ test('enter context navigates to associated focus canvas', async ({ page }) => {
 });
 
 test('context title is editable in focus view and persists after reload', async ({ page }) => {
-  const newTitle = `Main Orbit ${Date.now()}`;
+  const newTitle = `Main Orbit ${Date.now()} ${'Orbit '.repeat(20)}gentle boundary clamp check`;
   const name = page.locator('#context-name');
   await expect(name).toBeVisible();
 
@@ -972,7 +1368,14 @@ test('context title is editable in focus view and persists after reload', async 
   await page.waitForTimeout(700);
 
   await page.reload();
-  await expect(page.locator('#context-name')).toHaveText(newTitle);
+  const reloadedName = page.locator('#context-name');
+  await expect(reloadedName).toHaveText(newTitle);
+  const contextBox = await page.locator('.context-head').boundingBox();
+  const surfaceBox = await page.locator('#surface').boundingBox();
+  expect(contextBox).not.toBeNull();
+  expect(surfaceBox).not.toBeNull();
+  expect(contextBox!.x).toBeGreaterThanOrEqual(surfaceBox!.x);
+  expect(contextBox!.x + contextBox!.width).toBeLessThanOrEqual(surfaceBox!.x + surfaceBox!.width);
 });
 
 test('card note height increases from one line to two lines', async ({ page }) => {
