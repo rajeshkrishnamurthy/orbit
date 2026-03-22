@@ -19,6 +19,7 @@ linters:
     - nilerr
     - noctx
     - nolintlint
+    - revive
     - staticcheck
     - typecheck
     - unused

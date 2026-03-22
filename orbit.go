@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Registers the SQLite driver with database/sql.
 )
 
 //go:embed templates/*.html static/*
