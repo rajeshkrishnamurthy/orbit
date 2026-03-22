@@ -1171,7 +1171,7 @@ type contextUpsertInput struct {
 func decodeContextUpsertInput(r *http.Request) (contextUpsertInput, error) {
 	var in contextUpsertInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		return contextUpsertInput{}, err
+		return contextUpsertInput{}, fmt.Errorf("decode context upsert input: %w", err)
 	}
 	return in, nil
 }

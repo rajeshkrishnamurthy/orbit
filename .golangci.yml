@@ -23,6 +23,7 @@ linters:
     - staticcheck
     - typecheck
     - unused
+    - wrapcheck
 
 linters-settings:
   errcheck:
