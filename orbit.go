@@ -61,6 +61,26 @@ type Store struct {
 	db *sql.DB
 }
 
+var errWriteTargetNotFound = errors.New("write target not found")
+
+func writeTargetNotFoundError(action, id, contextID string) error {
+	if contextID == "" {
+		return fmt.Errorf("%s item %q: %w", action, id, errors.Join(errWriteTargetNotFound, sql.ErrNoRows))
+	}
+	return fmt.Errorf("%s item %q in context %q: %w", action, id, contextOrDefault(contextID), errors.Join(errWriteTargetNotFound, sql.ErrNoRows))
+}
+
+func requireRowsAffected(result sql.Result, operation string, onZero error) error {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s rows affected: %w", operation, err)
+	}
+	if rowsAffected == 0 {
+		return onZero
+	}
+	return nil
+}
+
 func newStore(dbPath string) (*Store, error) {
 	hadDB, initializedFlag, err := prepareStorePath(dbPath)
 	if err != nil {
@@ -285,17 +305,23 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 func (s *Store) delete(id string) error {
-	_, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
+	result, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete item %q: %w", id, err)
+	}
+	if err := requireRowsAffected(result, fmt.Sprintf("delete item %q", id), writeTargetNotFoundError("delete", id, "")); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (s *Store) setCompleted(id string, completed bool) error {
-	_, err := s.db.Exec(`UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
+	result, err := s.db.Exec(`UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("set item %q completed=%t: %w", id, completed, err)
+	}
+	if err := requireRowsAffected(result, fmt.Sprintf("set item %q completed=%t", id, completed), writeTargetNotFoundError("set completed", id, "")); err != nil {
+		return err
 	}
 	return nil
 }
@@ -394,9 +420,12 @@ func (s *Store) applyTouchState(it *Item) error {
 }
 
 func (s *Store) hide(id, contextID string) error {
-	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
+	result, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	if err != nil {
 		return fmt.Errorf("hide item %q in context %q: %w", id, contextOrDefault(contextID), err)
+	}
+	if err := requireRowsAffected(result, fmt.Sprintf("hide item %q in context %q", id, contextOrDefault(contextID)), writeTargetNotFoundError("hide", id, contextID)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -441,9 +470,12 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 }
 
 func (s *Store) unhideAt(id, contextID string, x, y float64) error {
-	_, err := s.db.Exec(`UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
+	result, err := s.db.Exec(`UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	if err != nil {
 		return fmt.Errorf("unhide item %q in context %q: %w", id, contextOrDefault(contextID), err)
+	}
+	if err := requireRowsAffected(result, fmt.Sprintf("unhide item %q in context %q", id, contextOrDefault(contextID)), writeTargetNotFoundError("unhide", id, contextID)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -697,9 +729,12 @@ func (s *Store) deleteContext(id string) error {
 	if id == "main-orbit" {
 		return errors.New("cannot delete Main Orbit")
 	}
-	_, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
+	result, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete context %q: %w", id, err)
+	}
+	if err := requireRowsAffected(result, fmt.Sprintf("delete context %q", id), fmt.Errorf("delete context %q: %w", id, errors.Join(errWriteTargetNotFound, sql.ErrNoRows))); err != nil {
+		return err
 	}
 	return nil
 }
@@ -894,6 +929,10 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.delete(in.ID); err != nil {
+		if errors.Is(err, errWriteTargetNotFound) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -925,6 +964,10 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		completed = *in.Completed
 	}
 	if err := a.store.setCompleted(in.ID, completed); err != nil {
+		if errors.Is(err, errWriteTargetNotFound) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1047,6 +1090,10 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.hide(in.ID, in.ContextID); err != nil {
+		if errors.Is(err, errWriteTargetNotFound) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1135,6 +1182,10 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.unhideAt(in.ID, in.ContextID, in.X, in.Y); err != nil {
+		if errors.Is(err, errWriteTargetNotFound) {
+			http.Error(w, "item not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1273,6 +1324,10 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.store.deleteContext(id); err != nil {
+		if errors.Is(err, errWriteTargetNotFound) {
+			http.Error(w, "context not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

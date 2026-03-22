@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"net"
 	"net/http"
@@ -253,6 +254,22 @@ func TestDeleteItemAPIRemovesCard(t *testing.T) {
 	}
 }
 
+func TestDeleteItemAPINotFoundOnMissingTarget(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	rr := postJSON(t, app.deleteItemAPI, map[string]any{"id": "missing-delete-target"})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing delete target, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `{"ok":true`) {
+		t.Fatalf("missing delete target must not return success payload: %s", rr.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rr.Body.String()), "not found") {
+		t.Fatalf("expected not-found response body, got: %s", rr.Body.String())
+	}
+}
+
 func TestCompleteItemAPIMarksItemCompletedAndRemovesFromSnapshot(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -364,6 +381,25 @@ func TestCompleteItemAPIUndoRestoresItemInOriginalContext(t *testing.T) {
 	}
 }
 
+func TestCompleteItemAPINotFoundOnMissingTarget(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	rr := postJSON(t, app.completeItemAPI, map[string]any{
+		"id":        "missing-complete-target",
+		"completed": true,
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing complete target, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `{"ok":true`) {
+		t.Fatalf("missing complete target must not return success payload: %s", rr.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(rr.Body.String()), "not found") {
+		t.Fatalf("expected not-found response body, got: %s", rr.Body.String())
+	}
+}
+
 func TestDeleteContextAPICascadesItems(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -433,6 +469,19 @@ func TestDeleteContextAPIMainOrbitRejected(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("expected main-orbit to still exist, count=%d", n)
+	}
+}
+
+func TestDeleteContextAPINotFoundOnMissingTarget(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	rr := postJSON(t, app.deleteContextAPI, map[string]any{"id": "missing-context-target"})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing context delete target, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `{"ok":true`) {
+		t.Fatalf("missing context delete must not return success payload: %s", rr.Body.String())
 	}
 }
 
@@ -556,6 +605,55 @@ func TestHideItemAPIUpdatesHiddenFlagAndCount(t *testing.T) {
 	}
 }
 
+func TestHideItemAPIWrongContextReturnsNotFound(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	const itemID = "t_hide_wrong_ctx_1"
+	const trueContextID = "t_ctx_hide_true"
+	const wrongContextID = "t_ctx_hide_wrong"
+	for _, c := range []Context{
+		{ID: trueContextID, Title: "True", SubNote: "", X: 500, Y: 300, Color: "var(--c2)"},
+		{ID: wrongContextID, Title: "Wrong", SubNote: "", X: 600, Y: 350, Color: "var(--c3)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("seed context %q: %v", c.ID, err)
+		}
+	}
+	if err := s.update(Item{
+		ID:        itemID,
+		ContextID: trueContextID,
+		Title:     "hide-wrong-context",
+		SubNote:   "",
+		X:         111,
+		Y:         222,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	// Deterministic choice: wrong context is treated as item-not-found (404).
+	rr := postJSON(t, app.hideItemAPI, map[string]any{
+		"id":        itemID,
+		"contextId": wrongContextID,
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for hide wrong context, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `{"ok":true`) {
+		t.Fatalf("wrong-context hide must not return success payload: %s", rr.Body.String())
+	}
+
+	var hidden int
+	var contextID string
+	if err := s.db.QueryRow(`SELECT hidden,context_id FROM items WHERE id=?`, itemID).Scan(&hidden, &contextID); err != nil {
+		t.Fatalf("query item after wrong-context hide: %v", err)
+	}
+	if hidden != 0 || contextID != trueContextID {
+		t.Fatalf("wrong-context hide mutated row unexpectedly: hidden=%d context=%q", hidden, contextID)
+	}
+}
+
 func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
 	s, _ := newTestStore(t)
 	app := &App{store: s}
@@ -599,6 +697,158 @@ func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
 	})
 	assertUnhideAtResponse(t, rr, targetX, targetY)
 	assertStoredItemVisibilityAndPosition(t, s, "t_hide_item_2", targetX, targetY)
+}
+
+func TestUnhideAtAPIWrongContextReturnsNotFound(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	const itemID = "t_unhide_wrong_ctx_1"
+	const trueContextID = "t_ctx_unhide_true"
+	const wrongContextID = "t_ctx_unhide_wrong"
+	for _, c := range []Context{
+		{ID: trueContextID, Title: "True", SubNote: "", X: 520, Y: 320, Color: "var(--c3)"},
+		{ID: wrongContextID, Title: "Wrong", SubNote: "", X: 610, Y: 360, Color: "var(--c4)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("seed context %q: %v", c.ID, err)
+		}
+	}
+	if err := s.update(Item{
+		ID:        itemID,
+		ContextID: trueContextID,
+		Title:     "unhide-wrong-context",
+		SubNote:   "",
+		X:         10,
+		Y:         20,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	if err := s.hide(itemID, trueContextID); err != nil {
+		t.Fatalf("hide seeded item: %v", err)
+	}
+
+	// Deterministic choice: wrong context is treated as item-not-found (404).
+	rr := postJSON(t, app.unhideAtAPI, map[string]any{
+		"id":        itemID,
+		"contextId": wrongContextID,
+		"x":         333.0,
+		"y":         444.0,
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unhide-at wrong context, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `{"ok":true`) {
+		t.Fatalf("wrong-context unhide-at must not return success payload: %s", rr.Body.String())
+	}
+
+	var hidden int
+	var x, y float64
+	var contextID string
+	if err := s.db.QueryRow(`SELECT hidden,x,y,context_id FROM items WHERE id=?`, itemID).Scan(&hidden, &x, &y, &contextID); err != nil {
+		t.Fatalf("query item after wrong-context unhide-at: %v", err)
+	}
+	if hidden != 1 || x != 10 || y != 20 || contextID != trueContextID {
+		t.Fatalf("wrong-context unhide-at mutated row unexpectedly: hidden=%d x=%v y=%v context=%q", hidden, x, y, contextID)
+	}
+}
+
+func TestStoreDeleteNoOpReturnsNotFoundError(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	err := s.delete("missing-store-delete-target")
+	if err == nil {
+		t.Fatal("expected delete no-op to return error")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected delete no-op to wrap sql.ErrNoRows, got: %v", err)
+	}
+}
+
+func TestStoreSetCompletedNoOpReturnsNotFoundError(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	err := s.setCompleted("missing-store-complete-target", true)
+	if err == nil {
+		t.Fatal("expected setCompleted no-op to return error")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected setCompleted no-op to wrap sql.ErrNoRows, got: %v", err)
+	}
+}
+
+func TestStoreHideWrongContextNoOpReturnsNotFoundError(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	const itemID = "t_store_hide_wrong_ctx_1"
+	const trueContextID = "t_store_hide_true"
+	const wrongContextID = "t_store_hide_wrong"
+	for _, c := range []Context{
+		{ID: trueContextID, Title: "True", SubNote: "", X: 100, Y: 100, Color: "var(--c2)"},
+		{ID: wrongContextID, Title: "Wrong", SubNote: "", X: 200, Y: 200, Color: "var(--c3)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("seed context %q: %v", c.ID, err)
+		}
+	}
+	if err := s.update(Item{
+		ID:        itemID,
+		ContextID: trueContextID,
+		Title:     "store-hide-wrong-context",
+		SubNote:   "",
+		X:         11,
+		Y:         22,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	err := s.hide(itemID, wrongContextID)
+	if err == nil {
+		t.Fatal("expected hide wrong-context no-op to return error")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected hide wrong-context no-op to wrap sql.ErrNoRows, got: %v", err)
+	}
+}
+
+func TestStoreUnhideAtWrongContextNoOpReturnsNotFoundError(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	const itemID = "t_store_unhide_wrong_ctx_1"
+	const trueContextID = "t_store_unhide_true"
+	const wrongContextID = "t_store_unhide_wrong"
+	for _, c := range []Context{
+		{ID: trueContextID, Title: "True", SubNote: "", X: 100, Y: 100, Color: "var(--c2)"},
+		{ID: wrongContextID, Title: "Wrong", SubNote: "", X: 200, Y: 200, Color: "var(--c3)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("seed context %q: %v", c.ID, err)
+		}
+	}
+	if err := s.update(Item{
+		ID:        itemID,
+		ContextID: trueContextID,
+		Title:     "store-unhide-wrong-context",
+		SubNote:   "",
+		X:         11,
+		Y:         22,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	if err := s.hide(itemID, trueContextID); err != nil {
+		t.Fatalf("hide seed item: %v", err)
+	}
+
+	err := s.unhideAt(itemID, wrongContextID, 333, 444)
+	if err == nil {
+		t.Fatal("expected unhide-at wrong-context no-op to return error")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected unhide-at wrong-context no-op to wrap sql.ErrNoRows, got: %v", err)
+	}
 }
 
 func TestRevealAllAPIReturnsItemsAndClearsHiddenSet(t *testing.T) {
