@@ -11,6 +11,7 @@ linters:
     - copyloopvar
     - errcheck
     - errorlint
+    - funlen
     - gocyclo
     - goimports
     - govet
@@ -18,9 +19,11 @@ linters:
     - nilerr
     - noctx
     - nolintlint
+    - revive
     - staticcheck
     - typecheck
     - unused
+    - wrapcheck
 
 linters-settings:
   errcheck:
@@ -44,5 +47,9 @@ issues:
     - desktop/release-artifacts
     - node_modules
     - .e2e-data
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - funlen
   max-issues-per-linter: 0
   max-same-issues: 0

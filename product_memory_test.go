@@ -195,102 +195,100 @@ func TestValidateLinkRejectsMissingTarget(t *testing.T) {
 	}
 }
 
-func TestValidateProjectArtifactAndLinkVariants(t *testing.T) {
-	t.Run("project defaults and invalid status", func(t *testing.T) {
-		base := CanonProject{
-			ID:       "orbit",
-			Name:     "Orbit",
-			RootPath: "/Users/rajeshk/.openclaw/projects/orbit",
-		}
-		if err := validateProject(base); err != nil {
-			t.Fatalf("expected project with default status to validate: %v", err)
-		}
+func TestValidateProjectVariants(t *testing.T) {
+	base := CanonProject{
+		ID:       "orbit",
+		Name:     "Orbit",
+		RootPath: "/Users/rajeshk/.openclaw/projects/orbit",
+	}
+	if err := validateProject(base); err != nil {
+		t.Fatalf("expected project with default status to validate: %v", err)
+	}
 
-		missingName := base
-		missingName.Name = ""
-		if err := validateProject(missingName); err == nil {
-			t.Fatal("expected missing project name to fail validation")
-		}
+	missingName := base
+	missingName.Name = ""
+	if err := validateProject(missingName); err == nil {
+		t.Fatal("expected missing project name to fail validation")
+	}
 
-		missingRootPath := base
-		missingRootPath.RootPath = ""
-		if err := validateProject(missingRootPath); err == nil {
-			t.Fatal("expected missing project root_path to fail validation")
-		}
+	missingRootPath := base
+	missingRootPath.RootPath = ""
+	if err := validateProject(missingRootPath); err == nil {
+		t.Fatal("expected missing project root_path to fail validation")
+	}
 
-		archived := base
-		archived.Status = "archived"
-		if err := validateProject(archived); err != nil {
-			t.Fatalf("expected archived project to validate: %v", err)
-		}
+	archived := base
+	archived.Status = "archived"
+	if err := validateProject(archived); err != nil {
+		t.Fatalf("expected archived project to validate: %v", err)
+	}
 
-		invalid := base
-		invalid.Status = "paused"
-		err := validateProject(invalid)
-		if err == nil || !strings.Contains(err.Error(), "invalid project status") {
-			t.Fatalf("expected invalid project status error, got %v", err)
-		}
-	})
+	invalid := base
+	invalid.Status = "paused"
+	err := validateProject(invalid)
+	if err == nil || !strings.Contains(err.Error(), "invalid project status") {
+		t.Fatalf("expected invalid project status error, got %v", err)
+	}
+}
 
-	t.Run("artifact invalid kind status and change type", func(t *testing.T) {
-		base := ProductArtifact{
-			ID:        "orbit:feature:test",
-			ProjectID: "orbit",
-			Kind:      artifactKindFeature,
-			Title:     "Feature",
-			DocPath:   "/Users/rajeshk/.openclaw/projects/orbit/spec/feature.md",
-		}
-		if err := validateArtifact(base); err != nil {
-			t.Fatalf("expected artifact with default status to validate: %v", err)
-		}
+func TestValidateArtifactVariants(t *testing.T) {
+	base := ProductArtifact{
+		ID:        "orbit:feature:test",
+		ProjectID: "orbit",
+		Kind:      artifactKindFeature,
+		Title:     "Feature",
+		DocPath:   "/Users/rajeshk/.openclaw/projects/orbit/spec/feature.md",
+	}
+	if err := validateArtifact(base); err != nil {
+		t.Fatalf("expected artifact with default status to validate: %v", err)
+	}
 
-		missingProjectID := base
-		missingProjectID.ProjectID = ""
-		if err := validateArtifact(missingProjectID); err == nil {
-			t.Fatal("expected missing project_id to fail validation")
-		}
+	missingProjectID := base
+	missingProjectID.ProjectID = ""
+	if err := validateArtifact(missingProjectID); err == nil {
+		t.Fatal("expected missing project_id to fail validation")
+	}
 
-		invalidKind := base
-		invalidKind.Kind = "invalid"
-		err := validateArtifact(invalidKind)
-		if err == nil || !strings.Contains(err.Error(), "invalid artifact kind") {
-			t.Fatalf("expected invalid artifact kind error, got %v", err)
-		}
+	invalidKind := base
+	invalidKind.Kind = "invalid"
+	err := validateArtifact(invalidKind)
+	if err == nil || !strings.Contains(err.Error(), "invalid artifact kind") {
+		t.Fatalf("expected invalid artifact kind error, got %v", err)
+	}
 
-		invalidStatus := base
-		invalidStatus.Status = "paused"
-		err = validateArtifact(invalidStatus)
-		if err == nil || !strings.Contains(err.Error(), "invalid artifact status") {
-			t.Fatalf("expected invalid artifact status error, got %v", err)
-		}
+	invalidStatus := base
+	invalidStatus.Status = "paused"
+	err = validateArtifact(invalidStatus)
+	if err == nil || !strings.Contains(err.Error(), "invalid artifact status") {
+		t.Fatalf("expected invalid artifact status error, got %v", err)
+	}
 
-		invalidChangeType := base
-		invalidChangeType.ChangeType = "merge"
-		err = validateArtifact(invalidChangeType)
-		if err == nil || !strings.Contains(err.Error(), "invalid change_type") {
-			t.Fatalf("expected invalid change_type error, got %v", err)
-		}
-	})
+	invalidChangeType := base
+	invalidChangeType.ChangeType = "merge"
+	err = validateArtifact(invalidChangeType)
+	if err == nil || !strings.Contains(err.Error(), "invalid change_type") {
+		t.Fatalf("expected invalid change_type error, got %v", err)
+	}
+}
 
-	t.Run("link doc path target and invalid type", func(t *testing.T) {
-		if err := validateLink(ArtifactLink{
-			FromArtifactID: "a1",
-			LinkType:       linkTypeAffects,
-			TargetDocPath:  "/tmp/doc.md",
-		}); err != nil {
-			t.Fatalf("expected doc-path-only target to validate: %v", err)
-		}
+func TestValidateLinkVariants(t *testing.T) {
+	if err := validateLink(ArtifactLink{
+		FromArtifactID: "a1",
+		LinkType:       linkTypeAffects,
+		TargetDocPath:  "/tmp/doc.md",
+	}); err != nil {
+		t.Fatalf("expected doc-path-only target to validate: %v", err)
+	}
 
-		invalid := ArtifactLink{
-			FromArtifactID: "a1",
-			LinkType:       "invalid",
-			TargetDocPath:  "/tmp/doc.md",
-		}
-		err := validateLink(invalid)
-		if err == nil || !strings.Contains(err.Error(), "invalid link_type") {
-			t.Fatalf("expected invalid link type error, got %v", err)
-		}
-	})
+	invalid := ArtifactLink{
+		FromArtifactID: "a1",
+		LinkType:       "invalid",
+		TargetDocPath:  "/tmp/doc.md",
+	}
+	err := validateLink(invalid)
+	if err == nil || !strings.Contains(err.Error(), "invalid link_type") {
+		t.Fatalf("expected invalid link type error, got %v", err)
+	}
 }
 
 func TestAddLinkTrimsOptionalTargets(t *testing.T) {

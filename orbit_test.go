@@ -74,7 +74,9 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 		t.Fatalf("chdir to %s: %v", dir, err)
 	}
 	defer func() {
-		_ = os.Chdir(wd)
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore cwd to %s: %v", wd, err)
+		}
 	}()
 	fn()
 }
@@ -117,6 +119,75 @@ func assertJSONResponse(t *testing.T, rr *httptest.ResponseRecorder, wantCode in
 	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "application/json") {
 		t.Fatalf("expected application/json content-type, got %q", got)
 	}
+}
+
+func assertSeededItemPosition(t *testing.T, items []Item, id string, wantX, wantY float64) {
+	t.Helper()
+	for _, it := range items {
+		if it.ID != id {
+			continue
+		}
+		if it.X != wantX || it.Y != wantY {
+			t.Fatalf("unexpected seeded position for %s: got=(%v,%v) want=(%v,%v)", id, it.X, it.Y, wantX, wantY)
+		}
+		return
+	}
+	t.Fatalf("expected seeded item %s to exist", id)
+}
+
+func assertUnhideAtResponse(t *testing.T, rr *httptest.ResponseRecorder, targetX, targetY float64) {
+	t.Helper()
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		Ok          bool `json:"ok"`
+		HiddenCount int  `json:"hiddenCount"`
+		Item        Item `json:"item"`
+	}](t, rr)
+	if !resp.Ok {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if !resp.Item.Stale || resp.Item.Hidden || resp.Item.Active {
+		t.Fatalf("expected restored item to be recomputed stale after unhide, got %#v", resp.Item)
+	}
+	if resp.Item.X != targetX || resp.Item.Y != targetY {
+		t.Fatalf("unexpected item coordinates in response: got (%v,%v), want (%v,%v)", resp.Item.X, resp.Item.Y, targetX, targetY)
+	}
+}
+
+func assertStoredItemVisibilityAndPosition(t *testing.T, s *Store, itemID string, targetX, targetY float64) {
+	t.Helper()
+	var hidden int
+	var gotX, gotY float64
+	if err := s.db.QueryRow(`SELECT hidden,x,y FROM items WHERE id=?`, itemID).Scan(&hidden, &gotX, &gotY); err != nil {
+		t.Fatalf("query item after unhide-at: %v", err)
+	}
+	if hidden != 0 {
+		t.Fatalf("expected hidden=0 after unhide-at, got %d", hidden)
+	}
+	if gotX != targetX || gotY != targetY {
+		t.Fatalf("unexpected coordinates after unhide-at: got (%v,%v), want (%v,%v)", gotX, gotY, targetX, targetY)
+	}
+}
+
+func newAPIResponseTestHarness(t *testing.T) (*Store, *App, string) {
+	t.Helper()
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_api_resp_ctx"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "API Response Context",
+		SubNote: "",
+		X:       500,
+		Y:       300,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+	return s, app, ctxID
 }
 
 func TestItemsAPICreatesCardAndPersistsPayload(t *testing.T) {
@@ -387,7 +458,7 @@ func TestStoreRestartKeepsExistingData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen newStore: %v", err)
 	}
-	defer s2.db.Close()
+	defer func() { _ = s2.db.Close() }()
 
 	var title string
 	if err := s2.db.QueryRow(`SELECT title FROM items WHERE id=?`, "custom-item-1").Scan(&title); err != nil {
@@ -526,35 +597,8 @@ func TestUnhideAtAPIRestoresVisibilityAndPosition(t *testing.T) {
 		"x":         targetX,
 		"y":         targetY,
 	})
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
-	}
-	resp := mustDecodeJSON[struct {
-		Ok          bool `json:"ok"`
-		HiddenCount int  `json:"hiddenCount"`
-		Item        Item `json:"item"`
-	}](t, rr)
-	if !resp.Ok {
-		t.Fatalf("expected ok=true, got false")
-	}
-	if !resp.Item.Stale || resp.Item.Hidden || resp.Item.Active {
-		t.Fatalf("expected restored item to be recomputed stale after unhide, got %#v", resp.Item)
-	}
-	if resp.Item.X != targetX || resp.Item.Y != targetY {
-		t.Fatalf("unexpected item coordinates in response: got (%v,%v), want (%v,%v)", resp.Item.X, resp.Item.Y, targetX, targetY)
-	}
-
-	var hidden int
-	var gotX, gotY float64
-	if err := s.db.QueryRow(`SELECT hidden,x,y FROM items WHERE id=?`, "t_hide_item_2").Scan(&hidden, &gotX, &gotY); err != nil {
-		t.Fatalf("query item after unhide-at: %v", err)
-	}
-	if hidden != 0 {
-		t.Fatalf("expected hidden=0 after unhide-at, got %d", hidden)
-	}
-	if gotX != targetX || gotY != targetY {
-		t.Fatalf("unexpected coordinates after unhide-at: got (%v,%v), want (%v,%v)", gotX, gotY, targetX, targetY)
-	}
+	assertUnhideAtResponse(t, rr, targetX, targetY)
+	assertStoredItemVisibilityAndPosition(t, s, "t_hide_item_2", targetX, targetY)
 }
 
 func TestRevealAllAPIReturnsItemsAndClearsHiddenSet(t *testing.T) {
@@ -782,31 +826,10 @@ func TestNewStoreSeedsCanonicalDefaults(t *testing.T) {
 		t.Fatalf("expected 7 seeded items, got %d", len(items))
 	}
 
-	want := map[string]struct {
-		x float64
-		y float64
-	}{
-		"i1": {x: 760, y: 280},
-		"i2": {x: 620, y: 380},
-		"i5": {x: 360, y: 460},
-		"i7": {x: 1020, y: 360},
-	}
-	for id, pos := range want {
-		found := false
-		for _, it := range items {
-			if it.ID != id {
-				continue
-			}
-			found = true
-			if it.X != pos.x || it.Y != pos.y {
-				t.Fatalf("unexpected seeded position for %s: got=(%v,%v) want=(%v,%v)", id, it.X, it.Y, pos.x, pos.y)
-			}
-			break
-		}
-		if !found {
-			t.Fatalf("expected seeded item %s to exist", id)
-		}
-	}
+	assertSeededItemPosition(t, items, "i1", 760, 280)
+	assertSeededItemPosition(t, items, "i2", 620, 380)
+	assertSeededItemPosition(t, items, "i5", 360, 460)
+	assertSeededItemPosition(t, items, "i7", 1020, 360)
 }
 
 func TestContextByIDDefaultsBlankAndUpsertPreservesCreatedAt(t *testing.T) {
@@ -860,79 +883,78 @@ func TestContextByIDDefaultsBlankAndUpsertPreservesCreatedAt(t *testing.T) {
 	}
 }
 
-func TestImportJSONImportsItemsAndHandlesEdgeCases(t *testing.T) {
+func TestImportJSONEmptyFileIsNoOp(t *testing.T) {
 	s, _ := newTestStore(t)
+	path := filepath.Join(t.TempDir(), "items.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	before, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot before import: %v", err)
+	}
+	err = s.importJSON(path)
+	if err != nil {
+		t.Fatalf("importJSON empty file: %v", err)
+	}
+	after, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot after import: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("empty import changed item count: before=%d after=%d", len(before), len(after))
+	}
+}
 
-	t.Run("empty file is a no-op", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "items.json")
-		if err := os.WriteFile(path, nil, 0o644); err != nil {
-			t.Fatalf("write empty file: %v", err)
-		}
-		before, err := s.snapshot("main-orbit")
-		if err != nil {
-			t.Fatalf("snapshot before import: %v", err)
-		}
-		if err := s.importJSON(path); err != nil {
-			t.Fatalf("importJSON empty file: %v", err)
-		}
-		after, err := s.snapshot("main-orbit")
-		if err != nil {
-			t.Fatalf("snapshot after import: %v", err)
-		}
-		if len(after) != len(before) {
-			t.Fatalf("empty import changed item count: before=%d after=%d", len(before), len(after))
-		}
-	})
+func TestImportJSONMalformedJSONFails(t *testing.T) {
+	s, _ := newTestStore(t)
+	path := filepath.Join(t.TempDir(), "items.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write malformed file: %v", err)
+	}
+	if err := s.importJSON(path); err == nil {
+		t.Fatal("expected malformed json to fail")
+	}
+}
 
-	t.Run("malformed json fails", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "items.json")
-		if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
-			t.Fatalf("write malformed file: %v", err)
-		}
-		if err := s.importJSON(path); err == nil {
-			t.Fatal("expected malformed json to fail")
-		}
+func TestImportJSONValidJSONImportsItems(t *testing.T) {
+	s, _ := newTestStore(t)
+	path := filepath.Join(t.TempDir(), "items.json")
+	payload, err := json.Marshal([]map[string]any{
+		{
+			"id":      "t_import_1",
+			"title":   "Imported item",
+			"subNote": "from json",
+			"x":       444.0,
+			"y":       555.0,
+			"color":   "var(--c5)",
+		},
 	})
-
-	t.Run("valid json imports items", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "items.json")
-		payload, err := json.Marshal([]map[string]any{
-			{
-				"id":      "t_import_1",
-				"title":   "Imported item",
-				"subNote": "from json",
-				"x":       444.0,
-				"y":       555.0,
-				"color":   "var(--c5)",
-			},
-		})
-		if err != nil {
-			t.Fatalf("marshal payload: %v", err)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	err = os.WriteFile(path, payload, 0o644)
+	if err != nil {
+		t.Fatalf("write valid file: %v", err)
+	}
+	err = s.importJSON(path)
+	if err != nil {
+		t.Fatalf("importJSON valid file: %v", err)
+	}
+	items, err := s.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot after valid import: %v", err)
+	}
+	for _, it := range items {
+		if it.ID != "t_import_1" {
+			continue
 		}
-		if err := os.WriteFile(path, payload, 0o644); err != nil {
-			t.Fatalf("write valid file: %v", err)
+		if it.Title != "Imported item" || it.SubNote != "from json" || it.X != 444.0 || it.Y != 555.0 || it.Color != "var(--c5)" {
+			t.Fatalf("unexpected imported item: %+v", it)
 		}
-		if err := s.importJSON(path); err != nil {
-			t.Fatalf("importJSON valid file: %v", err)
-		}
-		items, err := s.snapshot("main-orbit")
-		if err != nil {
-			t.Fatalf("snapshot after valid import: %v", err)
-		}
-		found := false
-		for _, it := range items {
-			if it.ID != "t_import_1" {
-				continue
-			}
-			found = true
-			if it.Title != "Imported item" || it.SubNote != "from json" || it.X != 444.0 || it.Y != 555.0 || it.Color != "var(--c5)" {
-				t.Fatalf("unexpected imported item: %+v", it)
-			}
-		}
-		if !found {
-			t.Fatal("expected imported item in snapshot")
-		}
-	})
+		return
+	}
+	t.Fatal("expected imported item in snapshot")
 }
 
 func TestHomeRendersFocusAndContextsModes(t *testing.T) {
@@ -1034,156 +1056,152 @@ func TestMigrateLegacyDataCopiesFilesWhenTargetEmpty(t *testing.T) {
 	}
 }
 
-func TestAPIResponsesUseJSONContentTypeAndExpectedBodies(t *testing.T) {
-	s, _ := newTestStore(t)
-	app := &App{store: s}
+func TestItemsAPISuccessResponseBody(t *testing.T) {
+	_, app, ctxID := newAPIResponseTestHarness(t)
 
-	ctxID := "t_api_resp_ctx"
-	if err := s.upsertContext(Context{
-		ID:      ctxID,
-		Title:   "API Response Context",
-		SubNote: "",
-		X:       500,
-		Y:       300,
-		Color:   "var(--c2)",
+	rr := postJSON(t, app.itemsAPI, map[string]any{
+		"id":        "t_api_resp_item_1",
+		"contextId": ctxID,
+		"title":     "Create",
+		"subNote":   "",
+		"x":         111.0,
+		"y":         222.0,
+		"color":     "var(--c3)",
+	})
+	assertJSONResponse(t, rr, http.StatusOK)
+
+	var body struct {
+		Ok             bool   `json:"ok"`
+		ID             string `json:"id"`
+		Active         bool   `json:"active"`
+		Stale          bool   `json:"stale"`
+		TouchedToday   bool   `json:"touchedToday"`
+		TouchCount7d   int    `json:"touchCount7d"`
+		LastTouchedDay string `json:"lastTouchedDay"`
+		InCenter       bool   `json:"inCenter"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode itemsAPI body: %v", err)
+	}
+	if !body.Ok || body.ID != "t_api_resp_item_1" || !body.Active || body.Stale || body.TouchedToday || body.TouchCount7d != 0 || body.LastTouchedDay != "" || body.InCenter {
+		t.Fatalf("unexpected body: %#v", body)
+	}
+}
+
+func TestHideUnhideRevealAndHiddenAPISuccessBodies(t *testing.T) {
+	s, app, ctxID := newAPIResponseTestHarness(t)
+
+	if err := s.update(Item{
+		ID:        "t_api_resp_item_2",
+		ContextID: ctxID,
+		Title:     "Hide me",
+		SubNote:   "",
+		X:         100,
+		Y:         100,
+		Color:     "var(--c1)",
 	}); err != nil {
-		t.Fatalf("upsertContext: %v", err)
+		t.Fatalf("seed hide item: %v", err)
 	}
 
-	t.Run("itemsAPI success body", func(t *testing.T) {
-		rr := postJSON(t, app.itemsAPI, map[string]any{
-			"id":        "t_api_resp_item_1",
-			"contextId": ctxID,
-			"title":     "Create",
-			"subNote":   "",
-			"x":         111.0,
-			"y":         222.0,
-			"color":     "var(--c3)",
-		})
-		assertJSONResponse(t, rr, http.StatusOK)
-		var body struct {
-			Ok           bool   `json:"ok"`
-			ID           string `json:"id"`
-			Active       bool   `json:"active"`
-			Stale        bool   `json:"stale"`
-			TouchedToday bool   `json:"touchedToday"`
-			TouchCount7d int    `json:"touchCount7d"`
-			LastTouchedDay string `json:"lastTouchedDay"`
-			InCenter     bool   `json:"inCenter"`
-		}
-		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
-			t.Fatalf("decode itemsAPI body: %v", err)
-		}
-		if !body.Ok || body.ID != "t_api_resp_item_1" || !body.Active || body.Stale || body.TouchedToday || body.TouchCount7d != 0 || body.LastTouchedDay != "" || body.InCenter {
-			t.Fatalf("unexpected body: %#v", body)
-		}
+	hideRR := postJSON(t, app.hideItemAPI, map[string]any{"id": "t_api_resp_item_2", "contextId": ctxID})
+	assertJSONResponse(t, hideRR, http.StatusOK)
+	if !strings.Contains(hideRR.Body.String(), `"ok":true`) || !strings.Contains(hideRR.Body.String(), `"hiddenCount"`) {
+		t.Fatalf("unexpected hide body: %s", hideRR.Body.String())
+	}
+
+	hiddenRR := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
+	assertJSONResponse(t, hiddenRR, http.StatusOK)
+	if !strings.Contains(hiddenRR.Body.String(), `"ok":true`) || !strings.Contains(hiddenRR.Body.String(), `"items"`) {
+		t.Fatalf("unexpected hidden body: %s", hiddenRR.Body.String())
+	}
+
+	unhideRR := postJSON(t, app.unhideAtAPI, map[string]any{
+		"id":        "t_api_resp_item_2",
+		"contextId": ctxID,
+		"x":         333.0,
+		"y":         444.0,
 	})
+	assertJSONResponse(t, unhideRR, http.StatusOK)
+	if !strings.Contains(unhideRR.Body.String(), `"ok":true`) || !strings.Contains(unhideRR.Body.String(), `"hiddenCount"`) {
+		t.Fatalf("unexpected unhide body: %s", unhideRR.Body.String())
+	}
 
-	t.Run("hide/unhide/reveal/hidden success bodies", func(t *testing.T) {
-		if err := s.update(Item{
-			ID:        "t_api_resp_item_2",
-			ContextID: ctxID,
-			Title:     "Hide me",
-			SubNote:   "",
-			X:         100,
-			Y:         100,
-			Color:     "var(--c1)",
-		}); err != nil {
-			t.Fatalf("seed hide item: %v", err)
-		}
-		hideRR := postJSON(t, app.hideItemAPI, map[string]any{"id": "t_api_resp_item_2", "contextId": ctxID})
-		assertJSONResponse(t, hideRR, http.StatusOK)
-		if !strings.Contains(hideRR.Body.String(), `"ok":true`) || !strings.Contains(hideRR.Body.String(), `"hiddenCount"`) {
-			t.Fatalf("unexpected hide body: %s", hideRR.Body.String())
-		}
+	_ = postJSON(t, app.hideItemAPI, map[string]any{"id": "t_api_resp_item_2", "contextId": ctxID})
+	revealRR := postJSON(t, app.revealAllAPI, map[string]any{"contextId": ctxID})
+	assertJSONResponse(t, revealRR, http.StatusOK)
+	if !strings.Contains(revealRR.Body.String(), `"ok":true`) || !strings.Contains(revealRR.Body.String(), `"hiddenCount":0`) {
+		t.Fatalf("unexpected reveal body: %s", revealRR.Body.String())
+	}
+}
 
-		hiddenRR := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
-		assertJSONResponse(t, hiddenRR, http.StatusOK)
-		if !strings.Contains(hiddenRR.Body.String(), `"ok":true`) || !strings.Contains(hiddenRR.Body.String(), `"items"`) {
-			t.Fatalf("unexpected hidden body: %s", hiddenRR.Body.String())
-		}
+func TestCompleteItemAPISuccessResponseBody(t *testing.T) {
+	s, app, ctxID := newAPIResponseTestHarness(t)
 
-		unhideRR := postJSON(t, app.unhideAtAPI, map[string]any{
-			"id":        "t_api_resp_item_2",
-			"contextId": ctxID,
-			"x":         333.0,
-			"y":         444.0,
-		})
-		assertJSONResponse(t, unhideRR, http.StatusOK)
-		if !strings.Contains(unhideRR.Body.String(), `"ok":true`) || !strings.Contains(unhideRR.Body.String(), `"hiddenCount"`) {
-			t.Fatalf("unexpected unhide body: %s", unhideRR.Body.String())
-		}
+	if err := s.update(Item{
+		ID:        "t_api_resp_item_complete",
+		ContextID: ctxID,
+		Title:     "Complete me",
+		SubNote:   "",
+		X:         140,
+		Y:         120,
+		Color:     "var(--c4)",
+	}); err != nil {
+		t.Fatalf("seed complete item: %v", err)
+	}
 
-		_ = postJSON(t, app.hideItemAPI, map[string]any{"id": "t_api_resp_item_2", "contextId": ctxID})
-		revealRR := postJSON(t, app.revealAllAPI, map[string]any{"contextId": ctxID})
-		assertJSONResponse(t, revealRR, http.StatusOK)
-		if !strings.Contains(revealRR.Body.String(), `"ok":true`) || !strings.Contains(revealRR.Body.String(), `"hiddenCount":0`) {
-			t.Fatalf("unexpected reveal body: %s", revealRR.Body.String())
-		}
+	rr := postJSON(t, app.completeItemAPI, map[string]any{
+		"id":        "t_api_resp_item_complete",
+		"completed": true,
 	})
+	assertJSONResponse(t, rr, http.StatusOK)
+	if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
+		t.Fatalf("unexpected body: %q", got)
+	}
+}
 
-	t.Run("complete success body", func(t *testing.T) {
-		if err := s.update(Item{
-			ID:        "t_api_resp_item_complete",
-			ContextID: ctxID,
-			Title:     "Complete me",
-			SubNote:   "",
-			X:         140,
-			Y:         120,
-			Color:     "var(--c4)",
-		}); err != nil {
-			t.Fatalf("seed complete item: %v", err)
-		}
-		rr := postJSON(t, app.completeItemAPI, map[string]any{
-			"id":        "t_api_resp_item_complete",
-			"completed": true,
-		})
-		assertJSONResponse(t, rr, http.StatusOK)
-		if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
-			t.Fatalf("unexpected body: %q", got)
-		}
+func TestContextsAndDeleteContextAPISuccessBodies(t *testing.T) {
+	_, app, _ := newAPIResponseTestHarness(t)
+
+	createRR := postJSON(t, app.contextsAPI, map[string]any{
+		"id":      "t_api_resp_ctx_delete",
+		"title":   "Temp",
+		"subNote": "",
+		"x":       400.0,
+		"y":       240.0,
+		"color":   "var(--c4)",
 	})
+	assertJSONResponse(t, createRR, http.StatusOK)
+	if !strings.Contains(createRR.Body.String(), `"ok":true`) || !strings.Contains(createRR.Body.String(), `"id":"t_api_resp_ctx_delete"`) {
+		t.Fatalf("unexpected contexts body: %s", createRR.Body.String())
+	}
 
-	t.Run("contexts and delete context success bodies", func(t *testing.T) {
-		createRR := postJSON(t, app.contextsAPI, map[string]any{
-			"id":      "t_api_resp_ctx_delete",
-			"title":   "Temp",
-			"subNote": "",
-			"x":       400.0,
-			"y":       240.0,
-			"color":   "var(--c4)",
-		})
-		assertJSONResponse(t, createRR, http.StatusOK)
-		if !strings.Contains(createRR.Body.String(), `"ok":true`) || !strings.Contains(createRR.Body.String(), `"id":"t_api_resp_ctx_delete"`) {
-			t.Fatalf("unexpected contexts body: %s", createRR.Body.String())
-		}
+	deleteCtxRR := postJSON(t, app.deleteContextAPI, map[string]any{"id": "t_api_resp_ctx_delete"})
+	assertJSONResponse(t, deleteCtxRR, http.StatusOK)
+	if got := strings.TrimSpace(deleteCtxRR.Body.String()); got != `{"ok":true}` {
+		t.Fatalf("unexpected delete context body: %q", got)
+	}
+}
 
-		deleteCtxRR := postJSON(t, app.deleteContextAPI, map[string]any{"id": "t_api_resp_ctx_delete"})
-		assertJSONResponse(t, deleteCtxRR, http.StatusOK)
-		if got := strings.TrimSpace(deleteCtxRR.Body.String()); got != `{"ok":true}` {
-			t.Fatalf("unexpected delete context body: %q", got)
-		}
-	})
+func TestDeleteItemAPISuccessResponseBody(t *testing.T) {
+	s, app, ctxID := newAPIResponseTestHarness(t)
 
-	t.Run("delete item success body", func(t *testing.T) {
-		if err := s.update(Item{
-			ID:        "t_api_resp_item_3",
-			ContextID: ctxID,
-			Title:     "Delete me",
-			SubNote:   "",
-			X:         90,
-			Y:         90,
-			Color:     "var(--c1)",
-		}); err != nil {
-			t.Fatalf("seed delete item: %v", err)
-		}
+	if err := s.update(Item{
+		ID:        "t_api_resp_item_3",
+		ContextID: ctxID,
+		Title:     "Delete me",
+		SubNote:   "",
+		X:         90,
+		Y:         90,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed delete item: %v", err)
+	}
 
-		rr := postJSON(t, app.deleteItemAPI, map[string]any{"id": "t_api_resp_item_3"})
-		assertJSONResponse(t, rr, http.StatusOK)
-		if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
-			t.Fatalf("unexpected body: %q", got)
-		}
-	})
+	rr := postJSON(t, app.deleteItemAPI, map[string]any{"id": "t_api_resp_item_3"})
+	assertJSONResponse(t, rr, http.StatusOK)
+	if got := strings.TrimSpace(rr.Body.String()); got != `{"ok":true}` {
+		t.Fatalf("unexpected body: %q", got)
+	}
 }
 
 func TestAPIsRejectMalformedJSONAndWrongMethods(t *testing.T) {
@@ -1463,9 +1481,8 @@ func TestPruneBackupsGuardsAndRetention(t *testing.T) {
 	}
 }
 
-func TestMigrateLegacyDataSkipAndPartialCopyCases(t *testing.T) {
+func TestMigrateLegacyDataNoLegacyDirectoryIsNoOp(t *testing.T) {
 	root := t.TempDir()
-
 	withWorkingDir(t, root, func() {
 		targetNoLegacy := filepath.Join(root, "target-no-legacy")
 		if err := os.MkdirAll(targetNoLegacy, 0o755); err != nil {
@@ -1475,7 +1492,10 @@ func TestMigrateLegacyDataSkipAndPartialCopyCases(t *testing.T) {
 			t.Fatalf("migrateLegacyData without legacy dir: %v", err)
 		}
 	})
+}
 
+func TestMigrateLegacyDataSkipsWhenTargetHasExistingDB(t *testing.T) {
+	root := t.TempDir()
 	withWorkingDir(t, root, func() {
 		legacyDir := filepath.Join(root, "data")
 		targetDir := filepath.Join(root, "target-existing")
@@ -1502,7 +1522,10 @@ func TestMigrateLegacyDataSkipAndPartialCopyCases(t *testing.T) {
 			t.Fatalf("target orbit.db should not be overwritten, got %q", string(got))
 		}
 	})
+}
 
+func TestMigrateLegacyDataCopiesOnlyPresentFiles(t *testing.T) {
+	root := t.TempDir()
 	withWorkingDir(t, root, func() {
 		legacyDir := filepath.Join(root, "data")
 		targetDir := filepath.Join(root, "target-partial-copy")
@@ -1543,9 +1566,10 @@ func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStore reopen with existing db: %v", err)
 	}
-	defer s2.db.Close()
+	defer func() { _ = s2.db.Close() }()
 
-	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
+	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
+	if err != nil {
 		t.Fatalf("expected latest backup file, stat err=%v", err)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
@@ -1581,18 +1605,20 @@ func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStore reopen with existing db: %v", err)
 	}
-	defer reopened.db.Close()
+	defer func() { _ = reopened.db.Close() }()
 
 	var title, subNote string
 	var x, y float64
-	if err := reopened.db.QueryRow(`SELECT title, sub_note, x, y FROM items WHERE id=?`, "t_update_retention_1").Scan(&title, &subNote, &x, &y); err != nil {
+	err = reopened.db.QueryRow(`SELECT title, sub_note, x, y FROM items WHERE id=?`, "t_update_retention_1").Scan(&title, &subNote, &x, &y)
+	if err != nil {
 		t.Fatalf("query retained item after restart: %v", err)
 	}
 	if title != "Retained Title" || subNote != "Retained note" || x != 240 || y != 360 {
 		t.Fatalf("retained item changed unexpectedly: title=%q sub=%q x=%v y=%v", title, subNote, x, y)
 	}
 
-	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
+	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
+	if err != nil {
 		t.Fatalf("expected latest backup file, stat err=%v", err)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
@@ -1609,7 +1635,7 @@ func TestOpenConfiguredDBFailsWhenParentDirectoryIsMissing(t *testing.T) {
 
 	db, err := openConfiguredDB(dbPath)
 	if db != nil {
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 	}
 	if err == nil {
 		t.Fatal("expected openConfiguredDB to fail when parent directory is missing")
@@ -1621,7 +1647,7 @@ func TestOpenConfiguredDBFailsWhenDatabasePathIsDirectory(t *testing.T) {
 
 	db, err := openConfiguredDB(dbPath)
 	if db != nil {
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 	}
 	if err == nil {
 		t.Fatal("expected openConfiguredDB to fail when database path is a directory")
@@ -1674,7 +1700,7 @@ func TestNewStoreRejectsInitializedEmptySQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if _, err := db.Exec(`
+	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS contexts (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -1684,10 +1710,11 @@ CREATE TABLE IF NOT EXISTS contexts (
   color TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);`); err != nil {
+);`)
+	if err != nil {
 		t.Fatalf("create contexts schema: %v", err)
 	}
-	if _, err := db.Exec(`
+	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY,
   context_id TEXT NOT NULL,
@@ -1700,13 +1727,16 @@ CREATE TABLE IF NOT EXISTS items (
   slipping INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);`); err != nil {
+);`)
+	if err != nil {
 		t.Fatalf("create items schema: %v", err)
 	}
-	if err := db.Close(); err != nil {
+	err = db.Close()
+	if err != nil {
 		t.Fatalf("close sqlite: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".orbit_initialized"), []byte("init"), 0o644); err != nil {
+	err = os.WriteFile(filepath.Join(dir, ".orbit_initialized"), []byte("init"), 0o644)
+	if err != nil {
 		t.Fatalf("write init flag: %v", err)
 	}
 
@@ -2181,7 +2211,7 @@ func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed newStore: %v", err)
 	}
-	if err := s.update(Item{
+	err = s.update(Item{
 		ID:        "t_update_item_1",
 		ContextID: "main-orbit",
 		Title:     "Persist through update",
@@ -2189,10 +2219,12 @@ func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
 		X:         420,
 		Y:         260,
 		Color:     "var(--c2)",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed update-retention item: %v", err)
 	}
-	if err := s.db.Close(); err != nil {
+	err = s.db.Close()
+	if err != nil {
 		t.Fatalf("close seeded store: %v", err)
 	}
 
@@ -2262,13 +2294,13 @@ func TestListenOrbitPrefers8080AndFallsBackWhenBusy(t *testing.T) {
 	if err != nil {
 		t.Skipf("8080 unavailable for test setup: %v", err)
 	}
-	defer occupied.Close()
+	defer func() { _ = occupied.Close() }()
 
 	ln, baseURL, err := listenOrbit()
 	if err != nil {
 		t.Fatalf("listenOrbit: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	if strings.HasSuffix(baseURL, ":8080") {
 		t.Fatalf("expected fallback away from busy 8080, got %s", baseURL)

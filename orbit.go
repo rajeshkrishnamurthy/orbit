@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Registers the SQLite driver with database/sql.
 )
 
 //go:embed templates/*.html static/*
@@ -64,37 +64,38 @@ type Store struct {
 func newStore(dbPath string) (*Store, error) {
 	hadDB, initializedFlag, err := prepareStorePath(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("prepare store path: %w", err)
 	}
 
 	db, err := openConfiguredDB(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open configured db: %w", err)
 	}
 
 	s := &Store{db: db}
-	if err := s.ensureSchema(); err != nil {
-		return nil, err
+	err = s.ensureSchema()
+	if err != nil {
+		return nil, fmt.Errorf("ensure schema: %w", err)
 	}
 
 	count, err := s.countItems()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("count items: %w", err)
 	}
 
 	if err := s.ensureDefaultContext(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ensure default context: %w", err)
 	}
 	if err := s.ensureItemsContext(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ensure items context: %w", err)
 	}
 
 	if err := s.seedIfNeeded(count, hadDB, initializedFlag); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("seed if needed: %w", err)
 	}
 
 	if err := os.WriteFile(initializedFlag, []byte(time.Now().Format(time.RFC3339)), 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("write initialized flag: %w", err)
 	}
 
 	return s, nil
@@ -103,7 +104,7 @@ func newStore(dbPath string) (*Store, error) {
 func prepareStorePath(dbPath string) (bool, string, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return false, "", err
+		return false, "", fmt.Errorf("create store directory: %w", err)
 	}
 
 	hadDB := fileExists(dbPath)
@@ -115,7 +116,9 @@ func prepareStorePath(dbPath string) (bool, string, error) {
 		return false, "", errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
 	}
 	if hadDB {
-		_ = backupDB(dbPath)
+		if err := backupDB(dbPath); err != nil {
+			return false, "", fmt.Errorf("backup db: %w", err)
+		}
 		return true, initializedFlag, nil
 	}
 	if fileExists(initializedFlag) {
@@ -127,7 +130,7 @@ func prepareStorePath(dbPath string) (bool, string, error) {
 func openConfiguredDB(dbPath string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
 	for _, pragma := range []string{
 		`PRAGMA journal_mode = WAL`,
@@ -136,7 +139,7 @@ func openConfiguredDB(dbPath string) (*sql.DB, error) {
 		`PRAGMA foreign_keys = ON`,
 	} {
 		if _, err := db.Exec(pragma); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("set sqlite pragma %q: %w", pragma, err)
 		}
 	}
 	return db, nil
@@ -190,23 +193,23 @@ CREATE TABLE IF NOT EXISTS touch_facts (
   FOREIGN KEY(card_id) REFERENCES items(id) ON DELETE CASCADE
 );`)
 	if err != nil {
-		return err
+		return fmt.Errorf("create schema tables: %w", err)
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN context_id TEXT NOT NULL DEFAULT 'main-orbit'`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return err
+		return fmt.Errorf("add items.context_id column: %w", err)
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return err
+		return fmt.Errorf("add items.hidden column: %w", err)
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return err
+		return fmt.Errorf("add items.slipping column: %w", err)
 	}
 	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return err
+		return fmt.Errorf("add items.completed column: %w", err)
 	}
 	return nil
 }
@@ -214,20 +217,23 @@ CREATE TABLE IF NOT EXISTS touch_facts (
 func (s *Store) countItems() (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM items`).Scan(&n)
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("count items query: %w", err)
+	}
+	return n, nil
 }
 
 func (s *Store) importJSON(path string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("read json import file %q: %w", path, err)
 	}
 	if len(b) == 0 {
 		return nil
 	}
 	var items []Item
 	if err := json.Unmarshal(b, &items); err != nil {
-		return err
+		return fmt.Errorf("decode json import file %q: %w", path, err)
 	}
 	for _, it := range items {
 		if it.UpdatedAt.IsZero() {
@@ -255,7 +261,10 @@ func (s *Store) update(item Item) error {
 		item.UpdatedAt = now
 	}
 	createdAt := now.Format(time.RFC3339Nano)
-	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	scanErr := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return fmt.Errorf("load item created_at %q: %w", item.ID, scanErr)
+	}
 	_, err := s.db.Exec(`
 INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
@@ -269,17 +278,26 @@ ON CONFLICT(id) DO UPDATE SET
   completed=excluded.completed,
   updated_at=excluded.updated_at;
 `, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), boolToInt(item.Completed), createdAt, now.Format(time.RFC3339Nano))
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert item %q: %w", item.ID, err)
+	}
+	return nil
 }
 
 func (s *Store) delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("delete item %q: %w", id, err)
+	}
+	return nil
 }
 
 func (s *Store) setCompleted(id string, completed bool) error {
 	_, err := s.db.Exec(`UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
-	return err
+	if err != nil {
+		return fmt.Errorf("set item %q completed=%t: %w", id, completed, err)
+	}
+	return nil
 }
 
 type touchSummary struct {
@@ -291,11 +309,11 @@ type touchSummary struct {
 func (s *Store) createdLocalDay(id string) (string, error) {
 	var createdAt string
 	if err := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
-		return "", err
+		return "", fmt.Errorf("load item %q created_at: %w", id, err)
 	}
 	created, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("parse item %q created_at: %w", id, err)
 	}
 	return localDayString(created), nil
 }
@@ -318,16 +336,16 @@ func withinLocalDays(day string, days int) bool {
 func (s *Store) touchSummary(id string) (touchSummary, error) {
 	rows, err := s.db.Query(`SELECT local_day FROM touch_facts WHERE card_id=? ORDER BY local_day DESC`, id)
 	if err != nil {
-		return touchSummary{}, err
+		return touchSummary{}, fmt.Errorf("query touch facts for %q: %w", id, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := touchSummary{}
 	today := localDayString(time.Now())
 	weekStart := localDayOffset(6)
 	for rows.Next() {
 		var day string
 		if err := rows.Scan(&day); err != nil {
-			return touchSummary{}, err
+			return touchSummary{}, fmt.Errorf("scan touch fact for %q: %w", id, err)
 		}
 		if out.lastTouchedDay == "" {
 			out.lastTouchedDay = day
@@ -339,7 +357,10 @@ func (s *Store) touchSummary(id string) (touchSummary, error) {
 			out.touchCount7d++
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("iterate touch facts for %q: %w", id, err)
+	}
+	return out, nil
 }
 
 func (s *Store) applyTouchState(it *Item) error {
@@ -374,27 +395,33 @@ func (s *Store) applyTouchState(it *Item) error {
 
 func (s *Store) hide(id, contextID string) error {
 	_, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
-	return err
+	if err != nil {
+		return fmt.Errorf("hide item %q in context %q: %w", id, contextOrDefault(contextID), err)
+	}
+	return nil
 }
 
 func (s *Store) hiddenCount(contextID string) (int, error) {
 	var n int
 	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, contextOrDefault(contextID)).Scan(&n)
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("count hidden items in context %q: %w", contextOrDefault(contextID), err)
+	}
+	return n, nil
 }
 
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query hidden items for context %q: %w", contextOrDefault(contextID), err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
 		var updated string
 		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), err)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
@@ -402,7 +429,7 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 		out = append(out, it)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate hidden items for context %q: %w", contextOrDefault(contextID), err)
 	}
 	for i := range out {
 		out[i].InCenter = classifyDesktopBand(out[i].X, out[i].Y)
@@ -415,21 +442,24 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 
 func (s *Store) unhideAt(id, contextID string, x, y float64) error {
 	_, err := s.db.Exec(`UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
-	return err
+	if err != nil {
+		return fmt.Errorf("unhide item %q in context %q: %w", id, contextOrDefault(contextID), err)
+	}
+	return nil
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query hidden items to reveal for context %q: %w", contextOrDefault(contextID), err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
 		var updated string
 		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan reveal-all row for context %q: %w", contextOrDefault(contextID), err)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
@@ -442,11 +472,11 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 		out = append(out, it)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterate reveal-all rows for context %q: %w", contextOrDefault(contextID), err)
 	}
 	now := time.Now().Format(time.RFC3339Nano)
 	if _, err := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("mark all hidden items revealed in context %q: %w", contextOrDefault(contextID), err)
 	}
 	return out, nil
 }
@@ -454,15 +484,15 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 func (s *Store) snapshot(contextID string) ([]Item, error) {
 	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query visible items for context %q: %w", contextOrDefault(contextID), err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
 		var updated string
 		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan visible item row for context %q: %w", contextOrDefault(contextID), err)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
@@ -473,7 +503,10 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 		}
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("iterate visible items for context %q: %w", contextOrDefault(contextID), err)
+	}
+	return out, nil
 }
 
 func (s *Store) touchItemState(id string) (*Item, error) {
@@ -481,7 +514,7 @@ func (s *Store) touchItemState(id string) (*Item, error) {
 	var updated string
 	err := s.db.QueryRow(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load item %q state: %w", id, err)
 	}
 	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 		it.UpdatedAt = t
@@ -499,32 +532,44 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 	createdAt := now.Format(time.RFC3339Nano)
 	tx, err := s.db.Begin()
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("begin touch tx for item %q: %w", id, err)
 	}
+	committed := false
 	defer func() {
-		_ = tx.Rollback()
+		if committed {
+			return
+		}
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("touchCard rollback failed: %v", rbErr)
+		}
 	}()
 
 	var existing int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing); err != nil {
-		return nil, false, err
+	err = tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing)
+	if err != nil {
+		return nil, false, fmt.Errorf("count touch facts for item %q on %s: %w", id, localDay, err)
 	}
 	if existing > 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, false, err
+		err = tx.Commit()
+		if err != nil {
+			return nil, false, fmt.Errorf("commit no-op touch tx for item %q: %w", id, err)
 		}
+		committed = true
 		item, stateErr := s.touchItemState(id)
 		if stateErr != nil {
 			return nil, false, stateErr
 		}
 		return item, false, nil
 	}
-	if _, err := tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt); err != nil {
-		return nil, false, err
+	_, err = tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt)
+	if err != nil {
+		return nil, false, fmt.Errorf("insert touch fact for item %q on %s: %w", id, localDay, err)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, false, err
+	err = tx.Commit()
+	if err != nil {
+		return nil, false, fmt.Errorf("commit touch tx for item %q: %w", id, err)
 	}
+	committed = true
 	item, err := s.touchItemState(id)
 	if err != nil {
 		return nil, false, err
@@ -542,18 +587,19 @@ func (s *Store) undoTouchCard(id string) (*Item, bool, error) {
 			item, stateErr := s.touchItemState(id)
 			return item, false, stateErr
 		}
-		return nil, false, err
+		return nil, false, fmt.Errorf("load touch fact for item %q on %s: %w", id, localDay, err)
 	}
 	created, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("parse touch fact timestamp for item %q: %w", id, err)
 	}
 	if now.Sub(created) > 6*time.Second {
 		item, stateErr := s.touchItemState(id)
 		return item, false, stateErr
 	}
-	if _, err := s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay); err != nil {
-		return nil, false, err
+	_, err = s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay)
+	if err != nil {
+		return nil, false, fmt.Errorf("delete touch fact for item %q on %s: %w", id, localDay, err)
 	}
 	item, err := s.touchItemState(id)
 	if err != nil {
@@ -572,42 +618,51 @@ func contextOrDefault(id string) string {
 func (s *Store) ensureDefaultContext() error {
 	now := time.Now().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "main-orbit", "Main Orbit", "", 560.0, 320.0, "var(--c1)", now, now)
-	return err
+	if err != nil {
+		return fmt.Errorf("ensure default context row: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ensureInitialContexts() error {
 	now := time.Now().Format(time.RFC3339Nano)
 	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "more-contexts", "Add more contexts", "Each context has its own canvas. Unleash!", 560.0, 500.0, "var(--c2)", now, now)
 	if err != nil {
-		return err
+		return fmt.Errorf("ensure initial contexts row: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) ensureItemsContext() error {
 	_, err := s.db.Exec(`UPDATE items SET context_id='main-orbit' WHERE context_id IS NULL OR context_id=''`)
-	return err
+	if err != nil {
+		return fmt.Errorf("backfill items context_id: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) contexts() ([]Context, error) {
 	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts ORDER BY updated_at DESC`)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query contexts: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Context{}
 	for rows.Next() {
 		var c Context
 		var updated string
 		if err := rows.Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan context row: %w", err)
 		}
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			c.UpdatedAt = t
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return out, fmt.Errorf("iterate contexts: %w", err)
+	}
+	return out, nil
 }
 
 func (s *Store) contextByID(id string) (*Context, error) {
@@ -616,7 +671,7 @@ func (s *Store) contextByID(id string) (*Context, error) {
 	var updated string
 	err := s.db.QueryRow(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts WHERE id=?`, id).Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load context %q: %w", id, err)
 	}
 	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 		c.UpdatedAt = t
@@ -627,9 +682,15 @@ func (s *Store) contextByID(id string) (*Context, error) {
 func (s *Store) upsertContext(c Context) error {
 	now := time.Now().Format(time.RFC3339Nano)
 	created := now
-	_ = s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	scanErr := s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return fmt.Errorf("load context %q created_at: %w", c.ID, scanErr)
+	}
 	_, err := s.db.Exec(`INSERT INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,sub_note=excluded.sub_note,x=excluded.x,y=excluded.y,color=excluded.color,updated_at=excluded.updated_at`, c.ID, c.Title, c.SubNote, c.X, c.Y, c.Color, created, now)
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert context %q: %w", c.ID, err)
+	}
+	return nil
 }
 
 func (s *Store) deleteContext(id string) error {
@@ -637,7 +698,10 @@ func (s *Store) deleteContext(id string) error {
 		return errors.New("cannot delete Main Orbit")
 	}
 	_, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
-	return err
+	if err != nil {
+		return fmt.Errorf("delete context %q: %w", id, err)
+	}
+	return nil
 }
 
 type App struct {
@@ -661,27 +725,28 @@ func seedItems() []Item {
 func newMux() (*http.ServeMux, error) {
 	tplFS, err := fs.Sub(embeddedAssets, "templates")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open embedded templates fs: %w", err)
 	}
 	tpl := template.Must(template.ParseFS(tplFS, "*.html"))
 
 	dataDir, err := orbitDataDir()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve orbit data dir: %w", err)
 	}
-	if err := migrateLegacyData(dataDir); err != nil {
-		return nil, err
+	err = migrateLegacyData(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("migrate legacy data: %w", err)
 	}
 
 	store, err := newStore(filepath.Join(dataDir, "orbit.db"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create store: %w", err)
 	}
 	app := &App{tpl: tpl, store: store}
 
 	staticFS, err := fs.Sub(embeddedAssets, "static")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open embedded static fs: %w", err)
 	}
 
 	mux := http.NewServeMux()
@@ -708,18 +773,21 @@ func NewHandler() (http.Handler, error) {
 func RunWeb(autoOpenBrowser bool) error {
 	mux, err := newMux()
 	if err != nil {
-		return err
+		return fmt.Errorf("build http mux: %w", err)
 	}
 
 	listener, baseURL, err := listenOrbit()
 	if err != nil {
-		return err
+		return fmt.Errorf("listen orbit: %w", err)
 	}
 	fmt.Printf("The Orbit running on %s\n", baseURL)
 	if autoOpenBrowser {
 		go openBrowser(baseURL)
 	}
-	return http.Serve(listener, mux)
+	if err := http.Serve(listener, mux); err != nil {
+		return fmt.Errorf("serve orbit http: %w", err)
+	}
+	return nil
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -736,8 +804,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		b, _ := json.Marshal(contexts)
-		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode})
+		b, err := json.Marshal(contexts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode}); err != nil {
+			log.Printf("render contexts home: %v", err)
+		}
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
@@ -755,8 +829,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode})
+	b, err := json.Marshal(items)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode}); err != nil {
+		log.Printf("render focus home: %v", err)
+	}
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -783,7 +863,7 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":             true,
 		"id":             state.ID,
 		"active":         state.Active,
@@ -792,7 +872,9 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		"touchCount7d":   state.TouchCount7d,
 		"lastTouchedDay": state.LastTouchedDay,
 		"inCenter":       state.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode itemsAPI response: %v", err)
+	}
 }
 
 func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +898,9 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write deleteItemAPI response: %v", err)
+	}
 }
 
 func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -845,7 +929,9 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write completeItemAPI response: %v", err)
+	}
 }
 
 type touchItemAPIResponse struct {
@@ -887,7 +973,7 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
 		Touched:        touched,
 		ID:             item.ID,
@@ -897,7 +983,9 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode touchItemAPI response: %v", err)
+	}
 }
 
 func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -926,7 +1014,7 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
 		Undone:         undone,
 		ID:             item.ID,
@@ -936,7 +1024,9 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode undoTouchItemAPI response: %v", err)
+	}
 }
 
 func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -960,9 +1050,15 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, _ := a.store.hiddenCount(in.ContextID)
+	hiddenN, err := a.store.hiddenCount(in.ContextID)
+	if err != nil {
+		log.Printf("hiddenCount after hide failed: %v", err)
+		hiddenN = 0
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
+	if _, err := w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN))); err != nil {
+		log.Printf("write hideItemAPI response: %v", err)
+	}
 }
 
 func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
@@ -973,15 +1069,23 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("decode revealAllAPI request: %v", err)
+	}
 	items, err := a.store.revealAllHidden(in.ContextID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write revealAllAPI response: %v", err)
+	}
 }
 
 func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -992,15 +1096,23 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("decode hiddenItemsAPI request: %v", err)
+	}
 	items, err := a.store.hiddenItems(in.ContextID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"ok": true, "items": items})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": items})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write hiddenItemsAPI response: %v", err)
+	}
 }
 
 func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
@@ -1031,30 +1143,40 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, _ := a.store.hiddenCount(in.ContextID)
+	hiddenN, err := a.store.hiddenCount(in.ContextID)
+	if err != nil {
+		log.Printf("hiddenCount after unhide failed: %v", err)
+		hiddenN = 0
+	}
 	w.Header().Set("Content-Type", "application/json")
-	b, _ := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
-	w.Write(b)
+	b, err := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write unhideAtAPI response: %v", err)
+	}
 }
 
-func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	var in struct {
-		ID      string   `json:"id"`
-		Title   *string  `json:"title"`
-		SubNote *string  `json:"subNote"`
-		X       *float64 `json:"x"`
-		Y       *float64 `json:"y"`
-		Color   *string  `json:"color"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+type contextUpsertInput struct {
+	ID      string   `json:"id"`
+	Title   *string  `json:"title"`
+	SubNote *string  `json:"subNote"`
+	X       *float64 `json:"x"`
+	Y       *float64 `json:"y"`
+	Color   *string  `json:"color"`
+}
 
+func decodeContextUpsertInput(r *http.Request) (contextUpsertInput, error) {
+	var in contextUpsertInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return contextUpsertInput{}, fmt.Errorf("decode context upsert input: %w", err)
+	}
+	return in, nil
+}
+
+func buildContextForUpsert(store *Store, in contextUpsertInput) (Context, error) {
 	id := strings.TrimSpace(in.ID)
 	if id == "" {
 		id = fmt.Sprintf("c_%d", time.Now().UnixNano())
@@ -1069,12 +1191,11 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		Color:   "var(--c1)",
 	}
 
-	existing, err := a.store.contextByID(id)
+	existing, err := store.contextByID(id)
 	if err == nil {
 		c = *existing
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return Context{}, err
 	}
 
 	if in.Title != nil {
@@ -1098,12 +1219,35 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	if c.Color == "" {
 		c.Color = "var(--c1)"
 	}
+
+	return c, nil
+}
+
+func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	in, err := decodeContextUpsertInput(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	c, err := buildContextForUpsert(a.store, in)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	if err := a.store.upsertContext(c); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true,"id":"` + id + `"}`))
+	if _, err := w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`)); err != nil {
+		log.Printf("write contextsAPI response: %v", err)
+	}
 }
 
 func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
@@ -1133,7 +1277,9 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write deleteContextAPI response: %v", err)
+	}
 }
 
 func isMobileRequest(r *http.Request) bool {
@@ -1171,7 +1317,7 @@ func fileExists(path string) bool {
 func backupDB(path string) error {
 	backupDir := filepath.Join(filepath.Dir(path), "backups")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
-		return err
+		return fmt.Errorf("create backup directory %q: %w", backupDir, err)
 	}
 	base := filepath.Base(path)
 	timestamp := time.Now().UTC().Format("20060102-150405")
@@ -1193,7 +1339,7 @@ func pruneBackups(path string, keep int) error {
 	}
 	entries, err := filepath.Glob(path + ".*.bak")
 	if err != nil {
-		return err
+		return fmt.Errorf("glob backup files for %q: %w", path, err)
 	}
 	if len(entries) <= keep {
 		return nil
@@ -1201,7 +1347,7 @@ func pruneBackups(path string, keep int) error {
 	sort.Strings(entries)
 	for _, stale := range entries[:len(entries)-keep] {
 		if rmErr := os.Remove(stale); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-			return rmErr
+			return fmt.Errorf("remove stale backup %q: %w", stale, rmErr)
 		}
 	}
 	return nil
@@ -1210,13 +1356,13 @@ func pruneBackups(path string, keep int) error {
 func orbitDataDir() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("ORBIT_DATA_DIR")); override != "" {
 		if err := os.MkdirAll(override, 0o755); err != nil {
-			return "", err
+			return "", fmt.Errorf("create override data dir %q: %w", override, err)
 		}
 		return override, nil
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("resolve user config dir: %w", err)
 	}
 	dir := filepath.Join(base, "Orbit")
 	if runtime.GOOS == "darwin" {
@@ -1226,7 +1372,7 @@ func orbitDataDir() (string, error) {
 		}
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", fmt.Errorf("create orbit data dir %q: %w", dir, err)
 	}
 	return dir, nil
 }
@@ -1260,21 +1406,25 @@ func migrateLegacyData(dataDir string) error {
 func copyFile(srcPath, dstPath string) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open source file %q: %w", srcPath, err)
 	}
-	defer src.Close()
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
-		return err
+	defer func() { _ = src.Close() }()
+	err = os.MkdirAll(filepath.Dir(dstPath), 0o755)
+	if err != nil {
+		return fmt.Errorf("create destination directory for %q: %w", dstPath, err)
 	}
 	dst, err := os.Create(dstPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("create destination file %q: %w", dstPath, err)
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 	if _, err := io.Copy(dst, src); err != nil {
-		return err
+		return fmt.Errorf("copy %q to %q: %w", srcPath, dstPath, err)
 	}
-	return dst.Close()
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close destination file %q: %w", dstPath, err)
+	}
+	return nil
 }
 
 func listenOrbit() (net.Listener, string, error) {
@@ -1294,13 +1444,13 @@ func listenOrbit() (net.Listener, string, error) {
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("listen on ephemeral orbit port: %w", err)
 	}
 	addr := ln.Addr().String()
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		ln.Close()
-		return nil, "", err
+		_ = ln.Close()
+		return nil, "", fmt.Errorf("split listener address %q: %w", addr, err)
 	}
 	return ln, "http://127.0.0.1:" + port, nil
 }

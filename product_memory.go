@@ -68,15 +68,15 @@ func defaultProductMemoryDBPath() string {
 func newProductMemoryStore() (*ProductMemoryStore, error) {
 	dbPath := defaultProductMemoryDBPath()
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create product memory directory: %w", err)
 	}
 	db, err := openConfiguredDB(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open product memory db: %w", err)
 	}
 	s := &ProductMemoryStore{db: db}
 	if err := s.ensureSchema(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ensure product memory schema: %w", err)
 	}
 	return s, nil
 }
@@ -85,7 +85,10 @@ func (s *ProductMemoryStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	if err := s.db.Close(); err != nil {
+		return fmt.Errorf("close product memory db: %w", err)
+	}
+	return nil
 }
 
 func (s *ProductMemoryStore) ensureSchema() error {
@@ -130,7 +133,10 @@ CREATE INDEX IF NOT EXISTS idx_product_artifacts_project_kind_status ON product_
 CREATE INDEX IF NOT EXISTS idx_artifact_links_from ON artifact_links(from_artifact_id, link_type);
 CREATE INDEX IF NOT EXISTS idx_artifact_links_target_artifact ON artifact_links(target_artifact_id, link_type);
 `)
-	return err
+	if err != nil {
+		return fmt.Errorf("create product memory schema: %w", err)
+	}
+	return nil
 }
 
 func (s *ProductMemoryStore) UpsertProject(p CanonProject) error {
@@ -147,7 +153,10 @@ ON CONFLICT(id) DO UPDATE SET
   status=excluded.status,
   updated_at=excluded.updated_at
 `, p.ID, p.Name, p.RootPath, defaultProjectStatus(p.Status), now, now)
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert project %q: %w", p.ID, err)
+	}
+	return nil
 }
 
 func (s *ProductMemoryStore) UpsertArtifact(a ProductArtifact) error {
@@ -168,7 +177,10 @@ ON CONFLICT(id) DO UPDATE SET
   product_truth_update_needed=excluded.product_truth_update_needed,
   updated_at=excluded.updated_at
 `, a.ID, a.ProjectID, a.Kind, a.Title, a.DocPath, defaultArtifactStatus(a.Status), nullableChangeType(a.ChangeType), boolInt(a.ProductTruthUpdateNeeded), now, now)
-	return err
+	if err != nil {
+		return fmt.Errorf("upsert artifact %q: %w", a.ID, err)
+	}
+	return nil
 }
 
 func (s *ProductMemoryStore) AddLink(link ArtifactLink) error {
@@ -179,7 +191,10 @@ func (s *ProductMemoryStore) AddLink(link ArtifactLink) error {
 INSERT INTO artifact_links(from_artifact_id, link_type, target_artifact_id, target_doc_path, target_section, notes, created_at)
 VALUES(?,?,?,?,?,?,?)
 `, link.FromArtifactID, link.LinkType, nullableString(link.TargetArtifact), nullableString(link.TargetDocPath), nullableString(link.TargetSection), link.Notes, time.Now().UTC().Format(time.RFC3339))
-	return err
+	if err != nil {
+		return fmt.Errorf("insert artifact link from %q: %w", link.FromArtifactID, err)
+	}
+	return nil
 }
 
 func validateProject(p CanonProject) error {

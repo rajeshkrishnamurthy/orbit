@@ -66,7 +66,8 @@ func TestListenOrbitUsesPreferredPortAndFallsBackWhenBusy(t *testing.T) {
 			_ = seed.Close()
 			t.Fatalf("split seed addr: %v", err)
 		}
-		if err := seed.Close(); err != nil {
+		err = seed.Close()
+		if err != nil {
 			t.Fatalf("close seed listener: %v", err)
 		}
 
@@ -76,7 +77,7 @@ func TestListenOrbitUsesPreferredPortAndFallsBackWhenBusy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("listenOrbit preferred: %v", err)
 		}
-		defer ln.Close()
+		defer func() { _ = ln.Close() }()
 
 		if !strings.HasSuffix(baseURL, ":"+portStr) {
 			t.Fatalf("unexpected baseURL: got %q want port %q", baseURL, portStr)
@@ -93,7 +94,7 @@ func TestListenOrbitUsesPreferredPortAndFallsBackWhenBusy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reserve busy port: %v", err)
 		}
-		defer busy.Close()
+		defer func() { _ = busy.Close() }()
 
 		_, busyPort, err := net.SplitHostPort(busy.Addr().String())
 		if err != nil {
@@ -106,7 +107,7 @@ func TestListenOrbitUsesPreferredPortAndFallsBackWhenBusy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("listenOrbit fallback: %v", err)
 		}
-		defer ln.Close()
+		defer func() { _ = ln.Close() }()
 
 		_, gotPort, err := net.SplitHostPort(ln.Addr().String())
 		if err != nil {
@@ -128,7 +129,7 @@ func TestListenOrbitDefaultPortIsNumeric(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listenOrbit default: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	_, portStr, err := net.SplitHostPort(ln.Addr().String())
 	if err != nil {
