@@ -1,0 +1,4 @@
+# Lint gate controls
+/.golangci.yml @rajeshkrishnamurthy
+/scripts/lint-strict.sh @rajeshkrishnamurthy
+/.github/workflows/go-lint-strict.yml @rajeshkrishnamurthy

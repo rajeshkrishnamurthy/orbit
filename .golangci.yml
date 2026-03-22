@@ -1,0 +1,48 @@
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  issues-exit-code: 1
+
+linters:
+  disable-all: true
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errcheck
+    - errorlint
+    - gocyclo
+    - goimports
+    - govet
+    - ineffassign
+    - nilerr
+    - noctx
+    - nolintlint
+    - staticcheck
+    - typecheck
+    - unused
+
+linters-settings:
+  errcheck:
+    check-blank: true
+    check-type-assertions: true
+  goimports:
+    local-prefixes: orbit
+  gocyclo:
+    min-complexity: 15
+  govet:
+    enable:
+      - shadow
+  nolintlint:
+    allow-unused: false
+    require-explanation: true
+    require-specific: true
+
+issues:
+  exclude-dirs:
+    - desktop/build
+    - desktop/release-artifacts
+    - node_modules
+    - .e2e-data
+  max-issues-per-linter: 0
+  max-same-issues: 0
