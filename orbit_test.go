@@ -1062,14 +1062,14 @@ func TestAPIResponsesUseJSONContentTypeAndExpectedBodies(t *testing.T) {
 		})
 		assertJSONResponse(t, rr, http.StatusOK)
 		var body struct {
-			Ok           bool   `json:"ok"`
-			ID           string `json:"id"`
-			Active       bool   `json:"active"`
-			Stale        bool   `json:"stale"`
-			TouchedToday bool   `json:"touchedToday"`
-			TouchCount7d int    `json:"touchCount7d"`
+			Ok             bool   `json:"ok"`
+			ID             string `json:"id"`
+			Active         bool   `json:"active"`
+			Stale          bool   `json:"stale"`
+			TouchedToday   bool   `json:"touchedToday"`
+			TouchCount7d   int    `json:"touchCount7d"`
 			LastTouchedDay string `json:"lastTouchedDay"`
-			InCenter     bool   `json:"inCenter"`
+			InCenter       bool   `json:"inCenter"`
 		}
 		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
 			t.Fatalf("decode itemsAPI body: %v", err)
