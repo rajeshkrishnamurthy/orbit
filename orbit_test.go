@@ -874,7 +874,8 @@ func TestImportJSONImportsItemsAndHandlesEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("snapshot before import: %v", err)
 		}
-		if err := s.importJSON(path); err != nil {
+		err = s.importJSON(path)
+		if err != nil {
 			t.Fatalf("importJSON empty file: %v", err)
 		}
 		after, err := s.snapshot("main-orbit")
@@ -911,10 +912,12 @@ func TestImportJSONImportsItemsAndHandlesEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal payload: %v", err)
 		}
-		if err := os.WriteFile(path, payload, 0o644); err != nil {
+		err = os.WriteFile(path, payload, 0o644)
+		if err != nil {
 			t.Fatalf("write valid file: %v", err)
 		}
-		if err := s.importJSON(path); err != nil {
+		err = s.importJSON(path)
+		if err != nil {
 			t.Fatalf("importJSON valid file: %v", err)
 		}
 		items, err := s.snapshot("main-orbit")
@@ -1547,7 +1550,8 @@ func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
 	}
 	defer func() { _ = s2.db.Close() }()
 
-	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
+	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
+	if err != nil {
 		t.Fatalf("expected latest backup file, stat err=%v", err)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
@@ -1587,14 +1591,16 @@ func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
 
 	var title, subNote string
 	var x, y float64
-	if err := reopened.db.QueryRow(`SELECT title, sub_note, x, y FROM items WHERE id=?`, "t_update_retention_1").Scan(&title, &subNote, &x, &y); err != nil {
+	err = reopened.db.QueryRow(`SELECT title, sub_note, x, y FROM items WHERE id=?`, "t_update_retention_1").Scan(&title, &subNote, &x, &y)
+	if err != nil {
 		t.Fatalf("query retained item after restart: %v", err)
 	}
 	if title != "Retained Title" || subNote != "Retained note" || x != 240 || y != 360 {
 		t.Fatalf("retained item changed unexpectedly: title=%q sub=%q x=%v y=%v", title, subNote, x, y)
 	}
 
-	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
+	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
+	if err != nil {
 		t.Fatalf("expected latest backup file, stat err=%v", err)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
@@ -1676,7 +1682,7 @@ func TestNewStoreRejectsInitializedEmptySQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if _, err := db.Exec(`
+	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS contexts (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -1686,10 +1692,11 @@ CREATE TABLE IF NOT EXISTS contexts (
   color TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);`); err != nil {
+);`)
+	if err != nil {
 		t.Fatalf("create contexts schema: %v", err)
 	}
-	if _, err := db.Exec(`
+	_, err = db.Exec(`
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY,
   context_id TEXT NOT NULL,
@@ -1702,13 +1709,16 @@ CREATE TABLE IF NOT EXISTS items (
   slipping INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
-);`); err != nil {
+);`)
+	if err != nil {
 		t.Fatalf("create items schema: %v", err)
 	}
-	if err := db.Close(); err != nil {
+	err = db.Close()
+	if err != nil {
 		t.Fatalf("close sqlite: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".orbit_initialized"), []byte("init"), 0o644); err != nil {
+	err = os.WriteFile(filepath.Join(dir, ".orbit_initialized"), []byte("init"), 0o644)
+	if err != nil {
 		t.Fatalf("write init flag: %v", err)
 	}
 
@@ -2183,7 +2193,7 @@ func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed newStore: %v", err)
 	}
-	if err := s.update(Item{
+	err = s.update(Item{
 		ID:        "t_update_item_1",
 		ContextID: "main-orbit",
 		Title:     "Persist through update",
@@ -2191,10 +2201,12 @@ func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
 		X:         420,
 		Y:         260,
 		Color:     "var(--c2)",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("seed update-retention item: %v", err)
 	}
-	if err := s.db.Close(); err != nil {
+	err = s.db.Close()
+	if err != nil {
 		t.Fatalf("close seeded store: %v", err)
 	}
 

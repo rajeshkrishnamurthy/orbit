@@ -66,7 +66,8 @@ func TestListenOrbitUsesPreferredPortAndFallsBackWhenBusy(t *testing.T) {
 			_ = seed.Close()
 			t.Fatalf("split seed addr: %v", err)
 		}
-		if err := seed.Close(); err != nil {
+		err = seed.Close()
+		if err != nil {
 			t.Fatalf("close seed listener: %v", err)
 		}
 

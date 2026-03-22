@@ -73,7 +73,8 @@ func newStore(dbPath string) (*Store, error) {
 	}
 
 	s := &Store{db: db}
-	if err := s.ensureSchema(); err != nil {
+	err = s.ensureSchema()
+	if err != nil {
 		return nil, err
 	}
 
@@ -517,11 +518,13 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 	}()
 
 	var existing int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing); err != nil {
+	err = tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing)
+	if err != nil {
 		return nil, false, err
 	}
 	if existing > 0 {
-		if err := tx.Commit(); err != nil {
+		err = tx.Commit()
+		if err != nil {
 			return nil, false, err
 		}
 		committed = true
@@ -531,10 +534,12 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 		}
 		return item, false, nil
 	}
-	if _, err := tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt); err != nil {
+	_, err = tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt)
+	if err != nil {
 		return nil, false, err
 	}
-	if err := tx.Commit(); err != nil {
+	err = tx.Commit()
+	if err != nil {
 		return nil, false, err
 	}
 	committed = true
@@ -565,7 +570,8 @@ func (s *Store) undoTouchCard(id string) (*Item, bool, error) {
 		item, stateErr := s.touchItemState(id)
 		return item, false, stateErr
 	}
-	if _, err := s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay); err != nil {
+	_, err = s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay)
+	if err != nil {
 		return nil, false, err
 	}
 	item, err := s.touchItemState(id)
@@ -685,7 +691,8 @@ func newMux() (*http.ServeMux, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := migrateLegacyData(dataDir); err != nil {
+	err = migrateLegacyData(dataDir)
+	if err != nil {
 		return nil, err
 	}
 
@@ -1337,7 +1344,8 @@ func copyFile(srcPath, dstPath string) error {
 		return err
 	}
 	defer func() { _ = src.Close() }()
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+	err = os.MkdirAll(filepath.Dir(dstPath), 0o755)
+	if err != nil {
 		return err
 	}
 	dst, err := os.Create(dstPath)
