@@ -1159,24 +1159,24 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	var in struct {
-		ID      string   `json:"id"`
-		Title   *string  `json:"title"`
-		SubNote *string  `json:"subNote"`
-		X       *float64 `json:"x"`
-		Y       *float64 `json:"y"`
-		Color   *string  `json:"color"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+type contextUpsertInput struct {
+	ID      string   `json:"id"`
+	Title   *string  `json:"title"`
+	SubNote *string  `json:"subNote"`
+	X       *float64 `json:"x"`
+	Y       *float64 `json:"y"`
+	Color   *string  `json:"color"`
+}
 
+func decodeContextUpsertInput(r *http.Request) (contextUpsertInput, error) {
+	var in contextUpsertInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		return contextUpsertInput{}, err
+	}
+	return in, nil
+}
+
+func buildContextForUpsert(store *Store, in contextUpsertInput) (Context, error) {
 	id := strings.TrimSpace(in.ID)
 	if id == "" {
 		id = fmt.Sprintf("c_%d", time.Now().UnixNano())
@@ -1191,12 +1191,11 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		Color:   "var(--c1)",
 	}
 
-	existing, err := a.store.contextByID(id)
+	existing, err := store.contextByID(id)
 	if err == nil {
 		c = *existing
 	} else if !errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return Context{}, err
 	}
 
 	if in.Title != nil {
@@ -1220,12 +1219,33 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	if c.Color == "" {
 		c.Color = "var(--c1)"
 	}
+
+	return c, nil
+}
+
+func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	in, err := decodeContextUpsertInput(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	c, err := buildContextForUpsert(a.store, in)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	if err := a.store.upsertContext(c); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write([]byte(`{"ok":true,"id":"` + id + `"}`)); err != nil {
+	if _, err := w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`)); err != nil {
 		log.Printf("write contextsAPI response: %v", err)
 	}
 }
