@@ -115,7 +115,9 @@ func prepareStorePath(dbPath string) (bool, string, error) {
 		return false, "", errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
 	}
 	if hadDB {
-		_ = backupDB(dbPath)
+		if err := backupDB(dbPath); err != nil {
+			return false, "", err
+		}
 		return true, initializedFlag, nil
 	}
 	if fileExists(initializedFlag) {
@@ -255,7 +257,10 @@ func (s *Store) update(item Item) error {
 		item.UpdatedAt = now
 	}
 	createdAt := now.Format(time.RFC3339Nano)
-	_ = s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	scanErr := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return scanErr
+	}
 	_, err := s.db.Exec(`
 INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
@@ -320,7 +325,7 @@ func (s *Store) touchSummary(id string) (touchSummary, error) {
 	if err != nil {
 		return touchSummary{}, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := touchSummary{}
 	today := localDayString(time.Now())
 	weekStart := localDayOffset(6)
@@ -388,7 +393,7 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
@@ -423,7 +428,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
@@ -456,7 +461,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Item{}
 	for rows.Next() {
 		var it Item
@@ -501,8 +506,14 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	committed := false
 	defer func() {
-		_ = tx.Rollback()
+		if committed {
+			return
+		}
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			log.Printf("touchCard rollback failed: %v", rbErr)
+		}
 	}()
 
 	var existing int
@@ -513,6 +524,7 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 		if err := tx.Commit(); err != nil {
 			return nil, false, err
 		}
+		committed = true
 		item, stateErr := s.touchItemState(id)
 		if stateErr != nil {
 			return nil, false, stateErr
@@ -525,6 +537,7 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
+	committed = true
 	item, err := s.touchItemState(id)
 	if err != nil {
 		return nil, false, err
@@ -594,7 +607,7 @@ func (s *Store) contexts() ([]Context, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Context{}
 	for rows.Next() {
 		var c Context
@@ -627,7 +640,10 @@ func (s *Store) contextByID(id string) (*Context, error) {
 func (s *Store) upsertContext(c Context) error {
 	now := time.Now().Format(time.RFC3339Nano)
 	created := now
-	_ = s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	scanErr := s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+		return scanErr
+	}
 	_, err := s.db.Exec(`INSERT INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,sub_note=excluded.sub_note,x=excluded.x,y=excluded.y,color=excluded.color,updated_at=excluded.updated_at`, c.ID, c.Title, c.SubNote, c.X, c.Y, c.Color, created, now)
 	return err
 }
@@ -736,8 +752,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		b, _ := json.Marshal(contexts)
-		_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode})
+		b, err := json.Marshal(contexts)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode}); err != nil {
+			log.Printf("render contexts home: %v", err)
+		}
 		return
 	}
 	cur, err := a.store.contextByID(ctxID)
@@ -755,8 +777,14 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(items)
-	_ = a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode})
+	b, err := json.Marshal(items)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode}); err != nil {
+		log.Printf("render focus home: %v", err)
+	}
 }
 
 func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -783,7 +811,7 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":             true,
 		"id":             state.ID,
 		"active":         state.Active,
@@ -792,7 +820,9 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		"touchCount7d":   state.TouchCount7d,
 		"lastTouchedDay": state.LastTouchedDay,
 		"inCenter":       state.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode itemsAPI response: %v", err)
+	}
 }
 
 func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -816,7 +846,9 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write deleteItemAPI response: %v", err)
+	}
 }
 
 func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -845,7 +877,9 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write completeItemAPI response: %v", err)
+	}
 }
 
 type touchItemAPIResponse struct {
@@ -887,7 +921,7 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
 		Touched:        touched,
 		ID:             item.ID,
@@ -897,7 +931,9 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode touchItemAPI response: %v", err)
+	}
 }
 
 func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -926,7 +962,7 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(touchItemAPIResponse{
+	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
 		Undone:         undone,
 		ID:             item.ID,
@@ -936,7 +972,9 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
-	})
+	}); err != nil {
+		log.Printf("encode undoTouchItemAPI response: %v", err)
+	}
 }
 
 func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -960,9 +998,15 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, _ := a.store.hiddenCount(in.ContextID)
+	hiddenN, err := a.store.hiddenCount(in.ContextID)
+	if err != nil {
+		log.Printf("hiddenCount after hide failed: %v", err)
+		hiddenN = 0
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN)))
+	if _, err := w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN))); err != nil {
+		log.Printf("write hideItemAPI response: %v", err)
+	}
 }
 
 func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
@@ -973,15 +1017,23 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("decode revealAllAPI request: %v", err)
+	}
 	items, err := a.store.revealAllHidden(in.ContextID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write revealAllAPI response: %v", err)
+	}
 }
 
 func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
@@ -992,15 +1044,23 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&in)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("decode hiddenItemsAPI request: %v", err)
+	}
 	items, err := a.store.hiddenItems(in.ContextID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	b, _ := json.Marshal(map[string]any{"ok": true, "items": items})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": items})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write hiddenItemsAPI response: %v", err)
+	}
 }
 
 func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
@@ -1031,10 +1091,20 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	hiddenN, _ := a.store.hiddenCount(in.ContextID)
+	hiddenN, err := a.store.hiddenCount(in.ContextID)
+	if err != nil {
+		log.Printf("hiddenCount after unhide failed: %v", err)
+		hiddenN = 0
+	}
 	w.Header().Set("Content-Type", "application/json")
-	b, _ := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
-	w.Write(b)
+	b, err := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write unhideAtAPI response: %v", err)
+	}
 }
 
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
@@ -1103,7 +1173,9 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true,"id":"` + id + `"}`))
+	if _, err := w.Write([]byte(`{"ok":true,"id":"` + id + `"}`)); err != nil {
+		log.Printf("write contextsAPI response: %v", err)
+	}
 }
 
 func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
@@ -1133,7 +1205,9 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"ok":true}`))
+	if _, err := w.Write([]byte(`{"ok":true}`)); err != nil {
+		log.Printf("write deleteContextAPI response: %v", err)
+	}
 }
 
 func isMobileRequest(r *http.Request) bool {
@@ -1262,7 +1336,7 @@ func copyFile(srcPath, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 		return err
 	}
@@ -1270,7 +1344,7 @@ func copyFile(srcPath, dstPath string) error {
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	defer func() { _ = dst.Close() }()
 	if _, err := io.Copy(dst, src); err != nil {
 		return err
 	}
@@ -1299,7 +1373,7 @@ func listenOrbit() (net.Listener, string, error) {
 	addr := ln.Addr().String()
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return nil, "", err
 	}
 	return ln, "http://127.0.0.1:" + port, nil

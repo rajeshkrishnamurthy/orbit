@@ -74,7 +74,9 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 		t.Fatalf("chdir to %s: %v", dir, err)
 	}
 	defer func() {
-		_ = os.Chdir(wd)
+		if err := os.Chdir(wd); err != nil {
+			t.Fatalf("restore cwd to %s: %v", wd, err)
+		}
 	}()
 	fn()
 }
@@ -387,7 +389,7 @@ func TestStoreRestartKeepsExistingData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen newStore: %v", err)
 	}
-	defer s2.db.Close()
+	defer func() { _ = s2.db.Close() }()
 
 	var title string
 	if err := s2.db.QueryRow(`SELECT title FROM items WHERE id=?`, "custom-item-1").Scan(&title); err != nil {
@@ -1543,7 +1545,7 @@ func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStore reopen with existing db: %v", err)
 	}
-	defer s2.db.Close()
+	defer func() { _ = s2.db.Close() }()
 
 	if _, err := os.Stat(filepath.Join(backupDir, "orbit.db.bak")); err != nil {
 		t.Fatalf("expected latest backup file, stat err=%v", err)
@@ -1581,7 +1583,7 @@ func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newStore reopen with existing db: %v", err)
 	}
-	defer reopened.db.Close()
+	defer func() { _ = reopened.db.Close() }()
 
 	var title, subNote string
 	var x, y float64
@@ -1609,7 +1611,7 @@ func TestOpenConfiguredDBFailsWhenParentDirectoryIsMissing(t *testing.T) {
 
 	db, err := openConfiguredDB(dbPath)
 	if db != nil {
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 	}
 	if err == nil {
 		t.Fatal("expected openConfiguredDB to fail when parent directory is missing")
@@ -1621,7 +1623,7 @@ func TestOpenConfiguredDBFailsWhenDatabasePathIsDirectory(t *testing.T) {
 
 	db, err := openConfiguredDB(dbPath)
 	if db != nil {
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 	}
 	if err == nil {
 		t.Fatal("expected openConfiguredDB to fail when database path is a directory")
@@ -2262,13 +2264,13 @@ func TestListenOrbitPrefers8080AndFallsBackWhenBusy(t *testing.T) {
 	if err != nil {
 		t.Skipf("8080 unavailable for test setup: %v", err)
 	}
-	defer occupied.Close()
+	defer func() { _ = occupied.Close() }()
 
 	ln, baseURL, err := listenOrbit()
 	if err != nil {
 		t.Fatalf("listenOrbit: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	if strings.HasSuffix(baseURL, ":8080") {
 		t.Fatalf("expected fallback away from busy 8080, got %s", baseURL)
