@@ -934,13 +934,24 @@
     };
   }
   function showDeleteUndo(payload){
-    showUndoToast('Deleted', 'delete', payload.id, () => {
+    showUndoToast('Deleted', 'delete', payload.id, async () => {
+      let res;
+      try {
+        res = await fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)
+        });
+      } catch (_err) {
+        showCanvasWarning(mode === 'focus' ? 'Unable to restore deleted card. Please try again.' : 'Unable to restore deleted context. Please try again.');
+        return false;
+      }
+      if (!res.ok) {
+        const message = await res.text().catch(() => '');
+        showCanvasWarning(message || (mode === 'focus' ? 'Unable to restore deleted card.' : 'Unable to restore deleted context.'));
+        return false;
+      }
       createPin(payload, false, true);
-      fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
-      });
       return true;
     });
   }
