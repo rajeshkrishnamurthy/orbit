@@ -810,21 +810,29 @@
     }, 180));
   }
 
-  function hidePinImmediate(pin){
+  async function hidePinImmediate(pin){
+    if (pin.dataset.hidePending === 'true') return;
     cancelPendingSave(pin.dataset.id);
-    fetch('/api/items/hide', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({id: pin.dataset.id, contextId: currentContextId})
-    }).then(async (r) => {
-      const d = await r.json();
-      hiddenCount = d.hiddenCount || (hiddenCount + 1);
+    pin.dataset.hidePending = 'true';
+    try {
+      const r = await fetch('/api/items/hide', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: pin.dataset.id, contextId: currentContextId})
+      });
+      if (!r.ok) throw new Error(`hide failed (${r.status})`);
+      const d = await r.json().catch(() => null);
+      hiddenCount = (d && Number.isFinite(Number(d.hiddenCount))) ? Number(d.hiddenCount) : (hiddenCount + 1);
       renderHiddenButton();
       if (trayOpen) openHiddenTray();
-    });
-    lensExempt.delete(pin.dataset.id);
-    if (activePin === pin) setActivePin(null);
-    pin.remove();
+      lensExempt.delete(pin.dataset.id);
+      if (activePin === pin) setActivePin(null);
+      pin.remove();
+      return;
+    } catch (_err) {
+      showCanvasWarning('Unable to hide card. Please try again.');
+    }
+    pin.dataset.hidePending = 'false';
   }
 
   async function deletePinImmediate(pin){

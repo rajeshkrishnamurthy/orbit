@@ -939,6 +939,36 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
 });
 
+test('hide failure keeps card visible and shows warning', async ({ page }) => {
+  const title = `hide-fail-${Date.now()}`;
+  const created = await createCard(page, title);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+  const initialCount = await getHiddenCount(page);
+  let failedOnce = false;
+
+  await page.route('**/api/items/hide', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.fulfill({ status: 500, body: 'hide failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
+
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to hide card. Please try again.');
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  await expect.poll(() => getHiddenCount(page)).toBe(initialCount);
+  expect(failedOnce).toBeTruthy();
+
+  const cleanup = await page.request.post('/api/items/delete', { data: { id } });
+  expect(cleanup.ok()).toBeTruthy();
+});
+
 test('hide/unhide preserves stale state', async ({ page }) => {
   const title = `hide-stale-${Date.now()}`;
   const created = await createCard(page, title);
