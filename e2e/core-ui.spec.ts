@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { expect, test, type Page, type Locator } from '@playwright/test';
+import { expect, test, type Page, type Locator, type ConsoleMessage } from '@playwright/test';
 
 async function createCard(page: Page, title: string, x = 1050, y = 620): Promise<Locator> {
   const pins = page.locator('.pin');
@@ -198,6 +198,25 @@ function ageCardInDb(id: string, daysAgo: number): void {
   const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
   const sql = `UPDATE items SET created_at=${sqlLiteral(when)} WHERE id=${sqlLiteral(id)};`;
   execFileSync('sqlite3', [sqliteDbPath(), sql], { stdio: 'pipe' });
+}
+
+function collectMutationFailureLogs(page: Page): { logs: string[]; stop: () => void } {
+  const logs: string[] = [];
+  const onConsole = (msg: ConsoleMessage): void => {
+    if (msg.type() !== 'error') return;
+    const text = msg.text();
+    if (!text.includes('[mutation-failure]')) return;
+    logs.push(text);
+  };
+  page.on('console', onConsole);
+  return {
+    logs,
+    stop: () => page.off('console', onConsole),
+  };
+}
+
+function hasMutationLog(logs: string[], operation: string, endpoint: string): boolean {
+  return logs.some((line) => line.includes(`"operation":"${operation}"`) && line.includes(`"endpoint":"${endpoint}"`));
 }
 
 test.beforeEach(async ({ page }) => {
@@ -1324,6 +1343,167 @@ test('delete undo waits for persistence before restoring card', async ({ page })
   await expect(page.locator('.undo-toast')).toHaveCount(0);
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
   expect(failedUndoOnce).toBeTruthy();
+});
+
+test('mutation failure logs include structured context for context-title and pin save', async ({ page }) => {
+  const collected = collectMutationFailureLogs(page);
+
+  let contextSaveFailed = false;
+  await page.route('**/api/contexts', async (route, request) => {
+    if (!contextSaveFailed && request.method() === 'POST') {
+      contextSaveFailed = true;
+      await route.fulfill({ status: 500, body: 'context save failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  const contextName = page.locator('#context-name');
+  await contextName.focus();
+  await contextName.evaluate((el, value) => {
+    el.textContent = String(value);
+    (el as HTMLElement).blur();
+  }, `ctx-log-${Date.now()}`);
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to save context title');
+
+  let saveFailed = false;
+  await page.route('**/api/items', async (route, request) => {
+    if (!saveFailed && request.method() === 'POST') {
+      saveFailed = true;
+      await route.fulfill({ status: 500, body: 'item save failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  const pin = page.locator('.pin').first();
+  await pin.locator('.pin-title input').fill(`save-log-${Date.now()}`);
+  await pin.locator('.pin-title input').blur();
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to save card changes');
+
+  expect(hasMutationLog(collected.logs, 'context-title-save', '/api/contexts')).toBeTruthy();
+  expect(hasMutationLog(collected.logs, 'save-pin', '/api/items')).toBeTruthy();
+  collected.stop();
+});
+
+test('mutation failure logs include structured context for hide failures', async ({ page }) => {
+  const collected = collectMutationFailureLogs(page);
+  const created = await createCard(page, `hide-log-${Date.now()}`);
+  let failedOnce = false;
+
+  await page.route('**/api/items/hide', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.fulfill({ status: 500, body: 'hide failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to hide card');
+  expect(failedOnce).toBeTruthy();
+  expect(hasMutationLog(collected.logs, 'hide-pin', '/api/items/hide')).toBeTruthy();
+  collected.stop();
+});
+
+test('mutation failure logs include structured context for delete failures', async ({ page }) => {
+  const collected = collectMutationFailureLogs(page);
+  const created = await createCard(page, `delete-log-${Date.now()}`);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+  let failedOnce = false;
+
+  await page.route('**/api/items/delete', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-delete').click();
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  expect(failedOnce).toBeTruthy();
+  await expect.poll(() => collected.logs.length).toBeGreaterThan(0);
+  const deleteLogText = collected.logs.join('\n');
+  expect(deleteLogText).toContain('"operation":"delete-pin"');
+  expect(deleteLogText).toContain('/api/items/delete');
+  collected.stop();
+});
+
+test('mutation failure logs include structured context for touch and complete failures', async ({ page }) => {
+  const collected = collectMutationFailureLogs(page);
+  const created = await createCard(page, `touch-complete-log-${Date.now()}`);
+
+  let touchFailed = false;
+  await page.route('**/api/items/touch', async (route, request) => {
+    if (!touchFailed && request.method() === 'POST') {
+      touchFailed = true;
+      await route.fulfill({ status: 500, body: 'touch failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await created.locator('.pin-touch').click();
+  await expect(page.locator('.canvas-warning')).toContainText(/Unable to touch card\.|touch failed/);
+
+  let completeFailed = false;
+  await page.route('**/api/items/complete', async (route, request) => {
+    if (!completeFailed && request.method() === 'POST') {
+      completeFailed = true;
+      await route.fulfill({ status: 500, body: 'complete failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-complete').click();
+  await expect(page.locator('.canvas-warning')).toContainText(/Unable to complete card\.|complete failed/);
+
+  expect(touchFailed).toBeTruthy();
+  expect(completeFailed).toBeTruthy();
+  expect(hasMutationLog(collected.logs, 'touch-pin', '/api/items/touch')).toBeTruthy();
+  expect(hasMutationLog(collected.logs, 'complete-pin', '/api/items/complete')).toBeTruthy();
+  collected.stop();
+});
+
+test('mutation failure logs include structured context for unhide failures', async ({ page }) => {
+  const collected = collectMutationFailureLogs(page);
+  const title = `unhide-log-${Date.now()}`;
+  const created = await createCard(page, title);
+
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
+  await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
+
+  let unhideFailed = false;
+  await page.route('**/api/items/unhide-at', async (route, request) => {
+    if (!unhideFailed && request.method() === 'POST') {
+      unhideFailed = true;
+      await route.fulfill({ status: 500, body: 'unhide failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  const hiddenToggle = page.locator('#hidden-toggle');
+  await hiddenToggle.click();
+  const hiddenItem = page.locator('.hidden-tray-item', { hasText: title }).first();
+  await expect(hiddenItem).toBeVisible();
+  await hiddenItem.dragTo(page.locator('#surface'), { targetPosition: { x: 360, y: 300 } });
+
+  await expect(page.locator('.canvas-warning')).toContainText(/unhide item|unhide failed/i);
+  expect(unhideFailed).toBeTruthy();
+  expect(hasMutationLog(collected.logs, 'unhide-at', '/api/items/unhide-at')).toBeTruthy();
+  collected.stop();
 });
 
 test('context delete requires confirmation and cancel keeps context', async ({ page }) => {
