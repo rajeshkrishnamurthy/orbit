@@ -1378,6 +1378,56 @@ test('context title is editable in focus view and persists after reload', async 
   expect(contextBox!.x + contextBox!.width).toBeLessThanOrEqual(surfaceBox!.x + surfaceBox!.width);
 });
 
+test('context title save failure restores previous value and shows warning', async ({ page }) => {
+  const name = page.locator('#context-name');
+  await expect(name).toBeVisible();
+  const previousTitle = ((await name.textContent()) || '').trim() || 'Main Orbit';
+  let failedOnce = false;
+
+  await page.route('**/api/contexts', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.fulfill({ status: 500, body: 'context save failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  const nextTitle = `ctx-fail-${Date.now()}`;
+  await name.focus();
+  await name.evaluate((el, value) => {
+    el.textContent = String(value);
+    (el as HTMLElement).blur();
+  }, nextTitle);
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to save context title. Restored previous value.');
+  await expect(name).toHaveText(previousTitle);
+  expect(failedOnce).toBeTruthy();
+});
+
+test('card save failure keeps local draft unsaved and shows warning', async ({ page }) => {
+  const pin = page.locator('.pin').first();
+  await expect(pin).toBeVisible();
+  const titleInput = pin.locator('.pin-title input');
+  const nextTitle = `card-fail-${Date.now()}`;
+  let failedOnce = false;
+
+  await page.route('**/api/items', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.fulfill({ status: 500, body: 'item save failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await titleInput.fill(nextTitle);
+  await titleInput.blur();
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to save card changes. Your edits are kept locally.');
+  await expect(titleInput).toHaveValue(nextTitle);
+  await expect(pin).toHaveAttribute('data-saved', 'false');
+  expect(failedOnce).toBeTruthy();
+});
+
 test('card note height increases from one line to two lines', async ({ page }) => {
   const pin = page.locator('.pin').first();
   await expect(pin).toBeVisible();

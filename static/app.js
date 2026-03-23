@@ -85,6 +85,30 @@
   toolbar.append(colorsPanel, filtersTray);
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
+  let contextTitlePersisted = contextNameEl ? ((contextNameEl.textContent || '').trim() || 'Main Orbit') : 'Main Orbit';
+  let contextTitleSaveSeq = 0;
+  async function persistContextTitle(){
+    if (!contextNameEl) return;
+    const nextTitle = (contextNameEl.textContent || '').trim() || 'Main Orbit';
+    contextNameEl.textContent = nextTitle;
+    const previousTitle = contextTitlePersisted;
+    if (nextTitle === previousTitle) return;
+    const saveSeq = ++contextTitleSaveSeq;
+    try {
+      const res = await fetch('/api/contexts', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id: currentContextId, title: nextTitle})
+      });
+      if (saveSeq !== contextTitleSaveSeq) return;
+      if (!res.ok) throw new Error(`context title save failed (${res.status})`);
+      contextTitlePersisted = nextTitle;
+    } catch (_err) {
+      if (saveSeq !== contextTitleSaveSeq) return;
+      contextNameEl.textContent = previousTitle;
+      showCanvasWarning('Unable to save context title. Restored previous value.');
+    }
+  }
   if (mode === 'focus' && contextNameEl) {
     contextNameEl.contentEditable = 'true';
     contextNameEl.addEventListener('pointerdown', (ev) => ev.stopPropagation());
@@ -96,9 +120,7 @@
       sel.removeAllRanges();
       sel.addRange(r);
     });
-    contextNameEl.addEventListener('blur', () => {
-      fetch('/api/contexts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: currentContextId, title: contextNameEl.textContent || 'Main Orbit'})});
-    });
+    contextNameEl.addEventListener('blur', () => { persistContextTitle(); });
   }
   if (openContextsEl) {
     openContextsEl.addEventListener('pointerdown', (ev) => ev.stopPropagation());
@@ -732,6 +754,7 @@
   }
 
   const pending = new Map();
+  const saveRequestSeq = new Map();
 
   function markPersisted(pin){
     pin.dataset.persistedTitle = pin.querySelector('.pin-title input').value;
@@ -763,18 +786,27 @@
     const id = pin.dataset.id;
     const payload = pinPayload(pin);
     cancelPendingSave(id);
-    pending.set(id, setTimeout(() => {
-      fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
-      }).then(async (res) => {
-        if (!res.ok) return;
+    pending.set(id, setTimeout(async () => {
+      const saveSeq = (saveRequestSeq.get(id) || 0) + 1;
+      saveRequestSeq.set(id, saveSeq);
+      try {
+        const res = await fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)
+        });
+        if (saveRequestSeq.get(id) !== saveSeq) return;
+        if (!res.ok) throw new Error(`save failed (${res.status})`);
         const data = await res.json().catch(() => null);
+        if (saveRequestSeq.get(id) !== saveSeq) return;
         if (data) applyTouchResponse(pin, data);
         pin.dataset.saved = 'true';
         markPersisted(pin);
-      });
+      } catch (_err) {
+        if (saveRequestSeq.get(id) !== saveSeq) return;
+        pin.dataset.saved = 'false';
+        showCanvasWarning(mode === 'focus' ? 'Unable to save card changes. Your edits are kept locally.' : 'Unable to save context changes. Your edits are kept locally.');
+      }
     }, 180));
   }
 
