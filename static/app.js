@@ -94,6 +94,7 @@
     const previousTitle = contextTitlePersisted;
     if (nextTitle === previousTitle) return;
     const saveSeq = ++contextTitleSaveSeq;
+    let status = null;
     try {
       const res = await fetch('/api/contexts', {
         method:'POST',
@@ -101,10 +102,22 @@
         body:JSON.stringify({id: currentContextId, title: nextTitle})
       });
       if (saveSeq !== contextTitleSaveSeq) return;
-      if (!res.ok) throw new Error(`context title save failed (${res.status})`);
+      status = res.status;
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `context title save failed (${res.status})`);
+      }
       contextTitlePersisted = nextTitle;
     } catch (_err) {
       if (saveSeq !== contextTitleSaveSeq) return;
+      logMutationFailure({
+        operation: 'context-title-save',
+        id: currentContextId,
+        contextId: currentContextId,
+        endpoint: '/api/contexts',
+        status,
+        error: mutationErrorSummary(_err),
+      });
       contextNameEl.textContent = previousTitle;
       showCanvasWarning('Unable to save context title. Restored previous value.');
     }
@@ -256,6 +269,28 @@
       token: '!',
       durationMs: 2800,
     });
+  }
+
+  function mutationErrorSummary(err){
+    if (err instanceof Error) return err.message;
+    if (typeof err === 'string') return err;
+    try {
+      return JSON.stringify(err);
+    } catch (_jsonErr) {
+      return String(err);
+    }
+  }
+
+  function logMutationFailure({ operation, id, contextId, endpoint, status, error }){
+    const payload = {
+      operation: operation || '',
+      id: id || '',
+      contextId: contextId || '',
+      endpoint: endpoint || '',
+      status: Number.isFinite(status) ? Number(status) : null,
+      error: error || '',
+    };
+    console.error('[mutation-failure]', JSON.stringify(payload));
   }
 
   function setSystemAckMode(mode){
@@ -785,18 +820,24 @@
     if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
     const id = pin.dataset.id;
     const payload = pinPayload(pin);
+    const endpoint = mode === 'focus' ? '/api/items' : '/api/contexts';
     cancelPendingSave(id);
     pending.set(id, setTimeout(async () => {
       const saveSeq = (saveRequestSeq.get(id) || 0) + 1;
       saveRequestSeq.set(id, saveSeq);
+      let status = null;
       try {
-        const res = await fetch(mode === 'focus' ? '/api/items' : '/api/contexts', {
+        const res = await fetch(endpoint, {
           method:'POST',
           headers:{'Content-Type':'application/json'},
           body:JSON.stringify(payload)
         });
         if (saveRequestSeq.get(id) !== saveSeq) return;
-        if (!res.ok) throw new Error(`save failed (${res.status})`);
+        status = res.status;
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          throw new Error(detail || `save failed (${res.status})`);
+        }
         const data = await res.json().catch(() => null);
         if (saveRequestSeq.get(id) !== saveSeq) return;
         if (data) applyTouchResponse(pin, data);
@@ -804,6 +845,14 @@
         markPersisted(pin);
       } catch (_err) {
         if (saveRequestSeq.get(id) !== saveSeq) return;
+        logMutationFailure({
+          operation: mode === 'focus' ? 'save-pin' : 'save-context-card',
+          id,
+          contextId: currentContextId,
+          endpoint,
+          status,
+          error: mutationErrorSummary(_err),
+        });
         pin.dataset.saved = 'false';
         showCanvasWarning(mode === 'focus' ? 'Unable to save card changes. Your edits are kept locally.' : 'Unable to save context changes. Your edits are kept locally.');
       }
@@ -814,13 +863,18 @@
     if (pin.dataset.hidePending === 'true') return;
     cancelPendingSave(pin.dataset.id);
     pin.dataset.hidePending = 'true';
+    let status = null;
     try {
       const r = await fetch('/api/items/hide', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id: pin.dataset.id, contextId: currentContextId})
       });
-      if (!r.ok) throw new Error(`hide failed (${r.status})`);
+      status = r.status;
+      if (!r.ok) {
+        const detail = await r.text().catch(() => '');
+        throw new Error(detail || `hide failed (${r.status})`);
+      }
       const d = await r.json().catch(() => null);
       hiddenCount = (d && Number.isFinite(Number(d.hiddenCount))) ? Number(d.hiddenCount) : (hiddenCount + 1);
       renderHiddenButton();
@@ -830,6 +884,14 @@
       pin.remove();
       return;
     } catch (_err) {
+      logMutationFailure({
+        operation: 'hide-pin',
+        id: pin.dataset.id,
+        contextId: currentContextId,
+        endpoint: '/api/items/hide',
+        status,
+        error: mutationErrorSummary(_err),
+      });
       showCanvasWarning('Unable to hide card. Please try again.');
     }
     pin.dataset.hidePending = 'false';
@@ -838,6 +900,7 @@
   async function deletePinImmediate(pin){
     if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
     const payload = pinPayload(pin);
+    const endpoint = mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete';
 
     if (mode === 'contexts') {
       const ok = await confirmContextDelete(payload.title);
@@ -848,13 +911,23 @@
     cancelPendingSave(payload.id);
 
     let res;
+    let status = null;
     try {
-      res = await fetch(mode === 'focus' ? '/api/items/delete' : '/api/contexts/delete', {
+      res = await fetch(endpoint, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id: payload.id})
       });
+      status = res.status;
     } catch (_err) {
+      logMutationFailure({
+        operation: mode === 'focus' ? 'delete-pin' : 'delete-context',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint,
+        status,
+        error: mutationErrorSummary(_err),
+      });
       if (mode === 'contexts') {
         showCanvasWarning('Unable to delete context. Please try again.');
       }
@@ -868,15 +941,39 @@
           res = retry;
         } else {
           const message = await retry.text();
+          logMutationFailure({
+            operation: 'delete-context',
+            id: payload.id,
+            contextId: currentContextId,
+            endpoint: '/api/contexts/delete?id=...',
+            status: retry.status,
+            error: message || `delete context failed (${retry.status})`,
+          });
           showCanvasWarning(message || 'Unable to delete context');
           return;
         }
       } catch (_err) {
+        logMutationFailure({
+          operation: 'delete-context',
+          id: payload.id,
+          contextId: currentContextId,
+          endpoint: '/api/contexts/delete?id=...',
+          status: null,
+          error: mutationErrorSummary(_err),
+        });
         showCanvasWarning('Unable to delete context. Please try again.');
         return;
       }
     } else if (!res.ok) {
       const message = await res.text();
+      logMutationFailure({
+        operation: mode === 'focus' ? 'delete-pin' : 'delete-context',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint,
+        status,
+        error: message || `delete failed (${status})`,
+      });
       if (mode === 'contexts') {
         showCanvasWarning(message || 'Unable to delete context');
       }
@@ -1030,6 +1127,7 @@
     if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
     if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
     const payload = pinPayload(pin);
+    let status = null;
     let res;
     try {
       res = await fetch('/api/items/touch', {
@@ -1037,12 +1135,29 @@
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id: payload.id})
       });
+      status = res.status;
     } catch (_err) {
+      logMutationFailure({
+        operation: 'touch-pin',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint: '/api/items/touch',
+        status,
+        error: mutationErrorSummary(_err),
+      });
       showCanvasWarning('Unable to touch card. Please try again.');
       return;
     }
     if (!res.ok) {
       const message = await res.text();
+      logMutationFailure({
+        operation: 'touch-pin',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint: '/api/items/touch',
+        status,
+        error: message || `touch failed (${status})`,
+      });
       showCanvasWarning(message || 'Unable to touch card.');
       return;
     }
@@ -1057,6 +1172,7 @@
     const payload = pinPayload(pin);
     pin.dataset.transitioning = 'true';
     cancelPendingSave(payload.id);
+    let status = null;
     let res;
     try {
       res = await fetch('/api/items/complete', {
@@ -1064,7 +1180,16 @@
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id: payload.id, completed: true})
       });
+      status = res.status;
     } catch (_err) {
+      logMutationFailure({
+        operation: 'complete-pin',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint: '/api/items/complete',
+        status,
+        error: mutationErrorSummary(_err),
+      });
       pin.dataset.transitioning = 'false';
       showCanvasWarning('Unable to complete card. Please try again.');
       return;
@@ -1072,6 +1197,14 @@
     if (!res.ok) {
       pin.dataset.transitioning = 'false';
       const message = await res.text();
+      logMutationFailure({
+        operation: 'complete-pin',
+        id: payload.id,
+        contextId: currentContextId,
+        endpoint: '/api/items/complete',
+        status,
+        error: message || `complete failed (${status})`,
+      });
       showCanvasWarning(message || 'Unable to complete card.');
       return;
     }
@@ -1396,9 +1529,14 @@
     renderHiddenButton();
     syncHiddenTray();
     const persist = async () => {
+      let status = null;
       try {
         const res = await fetch('/api/items/unhide-at', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({id, contextId: currentContextId, x, y})});
-        if (!res.ok) throw new Error('unhide failed');
+        status = res.status;
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          throw new Error(detail || `unhide failed (${res.status})`);
+        }
         const data = await res.json().catch(() => null);
         const pending = pendingUnhide.get(id);
         if (!pending) return;
@@ -1407,6 +1545,14 @@
         if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
         showResurfaceAck();
       } catch (_err) {
+        logMutationFailure({
+          operation: 'unhide-at',
+          id,
+          contextId: currentContextId,
+          endpoint: '/api/items/unhide-at',
+          status,
+          error: mutationErrorSummary(_err),
+        });
         const pending = pendingUnhide.get(id);
         if (!pending) return;
         pendingUnhide.delete(id);
