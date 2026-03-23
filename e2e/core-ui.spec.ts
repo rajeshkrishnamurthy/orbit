@@ -1298,6 +1298,34 @@ test('delete in focus uses undo without confirmation modal', async ({ page }) =>
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
 });
 
+test('delete undo waits for persistence before restoring card', async ({ page }) => {
+  const title = `delete-undo-fail-${Date.now()}`;
+  const created = await createCard(page, title, 1160, 320);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-delete').click();
+  await expect(page.locator('.undo-toast')).toContainText('Deleted');
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+
+  let failedUndoOnce = false;
+  await page.route('**/api/items', async (route, request) => {
+    if (!failedUndoOnce && request.method() === 'POST') {
+      failedUndoOnce = true;
+      await route.fulfill({ status: 500, body: 'restore failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.locator('.undo-btn').click();
+  await expect(page.locator('.canvas-warning')).toContainText(/Unable to restore deleted card\.|restore failed/);
+  await expect(page.locator('.undo-toast')).toHaveCount(0);
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
+  expect(failedUndoOnce).toBeTruthy();
+});
+
 test('context delete requires confirmation and cancel keeps context', async ({ page }) => {
   await page.goto('/?canvas=contexts');
   await expect(page.locator('#surface')).toBeVisible();
