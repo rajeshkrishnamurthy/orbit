@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -338,6 +339,86 @@ func TestHiddenTouchCardsPreserveLastTouchedDayThroughUnhide(t *testing.T) {
 	}
 }
 
+func TestListReadersUseSetBasedTouchDerivationWithoutConnectionFanout(t *testing.T) {
+	t.Run("snapshot", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "snapshot", 300*time.Millisecond, func() ([]Item, error) {
+			return s.snapshot("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-visible-active",
+			Active:         true,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   3,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         false,
+		})
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-visible-stale",
+			Active:         false,
+			Stale:          true,
+			TouchedToday:   false,
+			TouchCount7d:   0,
+			LastTouchedDay: localDayOffset(7),
+			Hidden:         false,
+		})
+	})
+
+	t.Run("hidden items", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "hiddenItems", 300*time.Millisecond, func() ([]Item, error) {
+			return s.hiddenItems("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("hiddenItems: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-hidden",
+			Active:         false,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   2,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         true,
+		})
+	})
+
+	t.Run("reveal all hidden", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "revealAllHidden", 300*time.Millisecond, func() ([]Item, error) {
+			return s.revealAllHidden("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("revealAllHidden: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-hidden",
+			Active:         true,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   2,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         false,
+		})
+	})
+}
+
 func mustCastTouchViews(t *testing.T, items []Item) []touchCardView {
 	t.Helper()
 	b, err := json.Marshal(items)
@@ -468,5 +549,103 @@ func assertTouchDerivationCase(t *testing.T, s *Store, id, title string, x, y fl
 	view := findTouchView(t, mustCastTouchViews(t, items), id)
 	if view.Active != wantActive || view.Stale != wantStale || view.TouchCount7d != wantCount {
 		t.Fatalf("unexpected derived touch state: %#v", view)
+	}
+}
+
+func newOwnedTestStore(t *testing.T) *Store {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "orbit.db")
+	s, err := newStore(dbPath)
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.db.Close()
+	})
+	return s
+}
+
+func seedTouchListReadFixture(t *testing.T, s *Store) {
+	t.Helper()
+	now := time.Now()
+	if err := s.update(Item{
+		ID:        "touch-list-visible-active",
+		ContextID: "main-orbit",
+		Title:     "visible active",
+		X:         620,
+		Y:         300,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed visible active: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-visible-active", 8)
+	insertTouchFact(t, s, "touch-list-visible-active", 0, now)
+	insertTouchFact(t, s, "touch-list-visible-active", 1, now)
+	insertTouchFact(t, s, "touch-list-visible-active", 2, now)
+
+	if err := s.update(Item{
+		ID:        "touch-list-visible-stale",
+		ContextID: "main-orbit",
+		Title:     "visible stale",
+		X:         1080,
+		Y:         320,
+		Color:     "var(--c2)",
+	}); err != nil {
+		t.Fatalf("seed visible stale: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-visible-stale", 8)
+	insertTouchFact(t, s, "touch-list-visible-stale", 7, now)
+
+	if err := s.update(Item{
+		ID:        "touch-list-hidden",
+		ContextID: "main-orbit",
+		Title:     "hidden",
+		X:         620,
+		Y:         300,
+		Color:     "var(--c3)",
+	}); err != nil {
+		t.Fatalf("seed hidden: %v", err)
+	}
+	if err := s.hide("touch-list-hidden", "main-orbit"); err != nil {
+		t.Fatalf("hide seeded hidden card: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-hidden", 8)
+	insertTouchFact(t, s, "touch-list-hidden", 0, now)
+	insertTouchFact(t, s, "touch-list-hidden", 1, now)
+}
+
+func assertTouchView(t *testing.T, items []Item, want touchCardView) {
+	t.Helper()
+	got := findTouchView(t, mustCastTouchViews(t, items), want.ID)
+	if got.Active != want.Active || got.Stale != want.Stale || got.TouchedToday != want.TouchedToday ||
+		got.TouchCount7d != want.TouchCount7d || got.LastTouchedDay != want.LastTouchedDay || got.Hidden != want.Hidden {
+		t.Fatalf("unexpected touch view for %s: got=%#v want=%#v", want.ID, got, want)
+	}
+}
+
+func mustCompleteListReadWithin(t *testing.T, s *Store, label string, timeout time.Duration, fn func() ([]Item, error)) ([]Item, error) {
+	t.Helper()
+	type result struct {
+		items []Item
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		items, err := fn()
+		done <- result{items: items, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.items, res.err
+	case <-time.After(timeout):
+		s.db.SetMaxOpenConns(4)
+		s.db.SetMaxIdleConns(4)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatalf("%s did not finish within %s with max_open_conns=1; likely per-item nested DB reads in list derivation", label, timeout)
+		return nil, nil
 	}
 }

@@ -332,16 +332,94 @@ type touchSummary struct {
 	touchedToday   bool
 }
 
-func (s *Store) createdLocalDay(id string) (string, error) {
-	var createdAt string
-	if err := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
-		return "", fmt.Errorf("load item %q created_at: %w", id, err)
+func deriveTouchState(it *Item, createdDay string, summary touchSummary) {
+	it.TouchedToday = summary.touchedToday
+	it.TouchCount7d = summary.touchCount7d
+	it.LastTouchedDay = summary.lastTouchedDay
+	if it.Hidden {
+		it.Active = false
+		it.Stale = false
+		return
 	}
+	activityAnchorDay := createdDay
+	if summary.lastTouchedDay > activityAnchorDay {
+		activityAnchorDay = summary.lastTouchedDay
+	}
+	if it.InCenter {
+		it.Active = withinLocalDays(activityAnchorDay, 2) || summary.touchCount7d >= 3
+	} else {
+		it.Active = withinLocalDays(activityAnchorDay, 4) || summary.touchCount7d >= 2
+	}
+	it.Stale = !it.Active
+}
+
+func parseCreatedLocalDay(id, createdAt string) (string, error) {
 	created, err := time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {
 		return "", fmt.Errorf("parse item %q created_at: %w", id, err)
 	}
 	return localDayString(created), nil
+}
+
+func (s *Store) touchSummaries(ids []string) (map[string]touchSummary, error) {
+	summaries := make(map[string]touchSummary, len(ids))
+	if len(ids) == 0 {
+		return summaries, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	today := localDayString(time.Now())
+	weekStart := localDayOffset(6)
+	query := fmt.Sprintf(`
+SELECT
+	card_id,
+	MAX(local_day) AS last_touched_day,
+	SUM(CASE WHEN local_day >= ? THEN 1 ELSE 0 END) AS touch_count_7d,
+	MAX(CASE WHEN local_day = ? THEN 1 ELSE 0 END) AS touched_today
+FROM touch_facts
+WHERE card_id IN (%s)
+GROUP BY card_id
+`, placeholders)
+	args := make([]any, 0, len(ids)+2)
+	args = append(args, weekStart, today)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query touch summaries: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			id            string
+			lastTouched   sql.NullString
+			touchCount7d  int
+			touchedTodayI int
+		)
+		if err := rows.Scan(&id, &lastTouched, &touchCount7d, &touchedTodayI); err != nil {
+			return nil, fmt.Errorf("scan touch summary row: %w", err)
+		}
+		summary := touchSummary{
+			touchCount7d: touchCount7d,
+			touchedToday: touchedTodayI > 0,
+		}
+		if lastTouched.Valid {
+			summary.lastTouchedDay = lastTouched.String
+		}
+		summaries[id] = summary
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate touch summaries: %w", err)
+	}
+	return summaries, nil
+}
+
+func (s *Store) createdLocalDay(id string) (string, error) {
+	var createdAt string
+	if err := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
+		return "", fmt.Errorf("load item %q created_at: %w", id, err)
+	}
+	return parseCreatedLocalDay(id, createdAt)
 }
 
 func localDayString(t time.Time) string {
@@ -398,24 +476,7 @@ func (s *Store) applyTouchState(it *Item) error {
 	if err != nil {
 		return err
 	}
-	it.TouchedToday = summary.touchedToday
-	it.TouchCount7d = summary.touchCount7d
-	it.LastTouchedDay = summary.lastTouchedDay
-	if it.Hidden {
-		it.Active = false
-		it.Stale = false
-		return nil
-	}
-	activityAnchorDay := createdDay
-	if summary.lastTouchedDay > activityAnchorDay {
-		activityAnchorDay = summary.lastTouchedDay
-	}
-	if it.InCenter {
-		it.Active = withinLocalDays(activityAnchorDay, 2) || summary.touchCount7d >= 3
-	} else {
-		it.Active = withinLocalDays(activityAnchorDay, 4) || summary.touchCount7d >= 2
-	}
-	it.Stale = !it.Active
+	deriveTouchState(it, createdDay, summary)
 	return nil
 }
 
@@ -440,31 +501,44 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 }
 
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
-	if err != nil {
-		return nil, fmt.Errorf("query hidden items for context %q: %w", contextOrDefault(contextID), err)
+	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	if queryErr != nil {
+		return nil, fmt.Errorf("query hidden items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []Item{}
+	createdByID := map[string]string{}
 	for rows.Next() {
 		var it Item
+		var created string
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), err)
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
+		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		createdByID[it.ID] = createdDay
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
 		out = append(out, it)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate hidden items for context %q: %w", contextOrDefault(contextID), err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate hidden items for context %q: %w", contextOrDefault(contextID), rowsErr)
+	}
+	ids := make([]string, 0, len(out))
+	for i := range out {
+		ids = append(ids, out[i].ID)
+	}
+	summaries, summaryErr := s.touchSummaries(ids)
+	if summaryErr != nil {
+		return nil, summaryErr
 	}
 	for i := range out {
 		out[i].InCenter = classifyDesktopBand(out[i].X, out[i].Y)
-		if err := s.applyTouchState(&out[i]); err != nil {
-			return nil, err
-		}
+		deriveTouchState(&out[i], createdByID[out[i].ID], summaries[out[i].ID])
 	}
 	return out, nil
 }
@@ -481,62 +555,92 @@ func (s *Store) unhideAt(id, contextID string, x, y float64) error {
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
-	if err != nil {
-		return nil, fmt.Errorf("query hidden items to reveal for context %q: %w", contextOrDefault(contextID), err)
+	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	if queryErr != nil {
+		return nil, fmt.Errorf("query hidden items to reveal for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []Item{}
+	createdByID := map[string]string{}
 	for rows.Next() {
 		var it Item
+		var created string
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, fmt.Errorf("scan reveal-all row for context %q: %w", contextOrDefault(contextID), err)
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+			return nil, fmt.Errorf("scan reveal-all row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
+		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		createdByID[it.ID] = createdDay
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
 		it.Hidden = false
-		if err := s.applyTouchState(&it); err != nil {
-			return nil, err
-		}
 		out = append(out, it)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reveal-all rows for context %q: %w", contextOrDefault(contextID), err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate reveal-all rows for context %q: %w", contextOrDefault(contextID), rowsErr)
+	}
+	ids := make([]string, 0, len(out))
+	for i := range out {
+		ids = append(ids, out[i].ID)
+	}
+	summaries, summaryErr := s.touchSummaries(ids)
+	if summaryErr != nil {
+		return nil, summaryErr
+	}
+	for i := range out {
+		deriveTouchState(&out[i], createdByID[out[i].ID], summaries[out[i].ID])
 	}
 	now := time.Now().Format(time.RFC3339Nano)
-	if _, err := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); err != nil {
-		return nil, fmt.Errorf("mark all hidden items revealed in context %q: %w", contextOrDefault(contextID), err)
+	if _, updateErr := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); updateErr != nil {
+		return nil, fmt.Errorf("mark all hidden items revealed in context %q: %w", contextOrDefault(contextID), updateErr)
 	}
 	return out, nil
 }
 
 func (s *Store) snapshot(contextID string) ([]Item, error) {
-	rows, err := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
-	if err != nil {
-		return nil, fmt.Errorf("query visible items for context %q: %w", contextOrDefault(contextID), err)
+	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	if queryErr != nil {
+		return nil, fmt.Errorf("query visible items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
 	defer func() { _ = rows.Close() }()
 	out := []Item{}
+	createdByID := map[string]string{}
 	for rows.Next() {
 		var it Item
+		var created string
 		var updated string
-		if err := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated); err != nil {
-			return nil, fmt.Errorf("scan visible item row for context %q: %w", contextOrDefault(contextID), err)
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+			return nil, fmt.Errorf("scan visible item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
+		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		createdByID[it.ID] = createdDay
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
-		if err := s.applyTouchState(&it); err != nil {
-			return nil, err
-		}
 		out = append(out, it)
 	}
-	if err := rows.Err(); err != nil {
-		return out, fmt.Errorf("iterate visible items for context %q: %w", contextOrDefault(contextID), err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return out, fmt.Errorf("iterate visible items for context %q: %w", contextOrDefault(contextID), rowsErr)
+	}
+	ids := make([]string, 0, len(out))
+	for i := range out {
+		ids = append(ids, out[i].ID)
+	}
+	summaries, summaryErr := s.touchSummaries(ids)
+	if summaryErr != nil {
+		return nil, summaryErr
+	}
+	for i := range out {
+		deriveTouchState(&out[i], createdByID[out[i].ID], summaries[out[i].ID])
 	}
 	return out, nil
 }
