@@ -42,6 +42,7 @@
     window.__MODE__ = "{{.Mode}}";
     window.__CURRENT_CONTEXT_ID__ = "{{.CurrentContextID}}";
     window.__CURRENT_CONTEXT_TITLE__ = "{{.CurrentContextTitle}}";
+    window.__CENTER_SEMANTICS__ = {{.CenterSemanticsJSON}};
     window.__MOBILE_MODE__ = {{if .MobileMode}}true{{else}}false{{end}};
   </script>
   {{if .MobileMode}}

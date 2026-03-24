@@ -234,28 +234,37 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
-	var itemsJSON template.JS
+	var (
+		itemsJSONBytes []byte
+		itemsJSON      template.JS
+	)
 	if resp.Mode == "contexts" {
-		b, err := json.Marshal(resp.Contexts)
+		itemsJSONBytes, err = json.Marshal(resp.Contexts)
 		if err != nil {
 			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 			return
 		}
-		itemsJSON = template.JS(b)
 	} else {
-		b, err := json.Marshal(resp.Items)
+		itemsJSONBytes, err = json.Marshal(resp.Items)
 		if err != nil {
 			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 			return
 		}
-		itemsJSON = template.JS(b)
 	}
+	itemsJSON = template.JS(itemsJSONBytes)
+	semanticsJSONBytes, err := json.Marshal(centerPeripherySemantics())
+	if err != nil {
+		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	semanticsJSON := template.JS(semanticsJSONBytes)
 	if err := a.tpl.Execute(w, map[string]any{
 		"ItemsJSON":           itemsJSON,
 		"HiddenCount":         resp.HiddenCount,
 		"Mode":                resp.Mode,
 		"CurrentContextID":    resp.CurrentContextID,
 		"CurrentContextTitle": resp.CurrentContextTitle,
+		"CenterSemanticsJSON": semanticsJSON,
 		"MobileMode":          resp.MobileMode,
 	}); err != nil {
 		log.Printf("render focus home: %v", err)

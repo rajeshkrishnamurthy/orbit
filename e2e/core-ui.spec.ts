@@ -551,7 +551,7 @@ test('strip pressure degrades the acknowledgment while Context/Hidden/Lens stay 
   await setPageZoom(page, 1);
 });
 
-test('center/periphery lens + slider updates visible card set', async ({ page }) => {
+test('center/periphery lens keeps canonical membership while slider only moves the cue', async ({ page }) => {
   const total = await page.locator('.pin').count();
   expect(total).toBeGreaterThan(1);
 
@@ -559,9 +559,12 @@ test('center/periphery lens + slider updates visible card set', async ({ page })
   await page.locator('.lens-btn[data-lens="center"]').click();
   await setLensSlider(page, 68);
   const center68 = await visiblePinIds(page);
+  const slider = page.locator('.lens-slider');
+  await expect(slider).toHaveValue('68');
 
   await setLensSlider(page, 35);
   const center35 = await visiblePinIds(page);
+  await expect(slider).toHaveValue('35');
 
   await page.locator('.lens-btn[data-lens="periphery"]').click();
   await setLensSlider(page, 68);
@@ -572,7 +575,54 @@ test('center/periphery lens + slider updates visible card set', async ({ page })
   expect(center68.length).toBeLessThan(total);
   expect(periphery68.length).toBeGreaterThan(0);
   expect(periphery68.length).toBeLessThan(total);
-  expect(normalize(center35)).toBeTruthy();
+  expect(normalize(center35)).toEqual(normalize(center68));
+});
+
+test('canonical center semantics match pin classification and default lens visibility', async ({ page }) => {
+  await ensureFiltersTrayOpen(page);
+
+  const expected = await page.$$eval('.pin', (nodes) => {
+    const semantics = (window as Window & {
+      __CENTER_SEMANTICS__?: { desktopWidth?: number; desktopHeight?: number; radiusScale?: number; lensRatio?: number };
+    }).__CENTER_SEMANTICS__;
+    if (!semantics) {
+      throw new Error('missing __CENTER_SEMANTICS__ bootstrap');
+    }
+    const width = Number(semantics.desktopWidth);
+    const height = Number(semantics.desktopHeight);
+    const radiusScale = Number(semantics.radiusScale);
+    const lensRatio = Number(semantics.lensRatio);
+    const cx = width / 2;
+    const cy = height / 2;
+    const cutoff = Math.min(width, height) * radiusScale * lensRatio;
+    return nodes.map((node) => {
+      const el = node as HTMLElement;
+      const x = parseFloat(el.style.left || '0');
+      const y = parseFloat(el.style.top || '0');
+      const inCenter = Math.hypot(x - cx, y - cy) <= cutoff;
+      return {
+        id: el.dataset.id || '',
+        attr: el.dataset.inCenter === 'true',
+        inCenter,
+      };
+    });
+  });
+
+  expect(expected.length).toBeGreaterThan(1);
+  expect(expected.every((item) => item.id)).toBeTruthy();
+  expect(expected.every((item) => item.attr === item.inCenter)).toBeTruthy();
+
+  await page.locator('.lens-btn[data-lens="center"]').click();
+  await setLensSlider(page, 68);
+  const centerVisible = [...(await visiblePinIds(page))].sort();
+  const expectedCenter = expected.filter((item) => item.inCenter).map((item) => item.id).sort();
+  expect(centerVisible).toEqual(expectedCenter);
+
+  await page.locator('.lens-btn[data-lens="periphery"]').click();
+  await setLensSlider(page, 68);
+  const peripheryVisible = [...(await visiblePinIds(page))].sort();
+  const expectedPeriphery = expected.filter((item) => !item.inCenter).map((item) => item.id).sort();
+  expect(peripheryVisible).toEqual(expectedPeriphery);
 });
 
 test('center/periphery slider stays visible inline between Periphery and Stale', async ({ page }) => {

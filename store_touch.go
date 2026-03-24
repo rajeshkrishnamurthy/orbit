@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"strings"
 	"time"
 )
@@ -249,15 +248,4 @@ func (s *Store) undoTouchCardWithContext(ctx context.Context, id string) (*Item,
 		return nil, false, err
 	}
 	return item, true, nil
-}
-func classifyDesktopBand(x, y float64) bool {
-	// Desktop source-of-truth classification (matches Orbit desktop geometry baseline)
-	const desktopW = 1272.0
-	const desktopH = 740.0
-	const lensRatio = 0.68
-	cx, cy := desktopW/2, desktopH/2
-	maxR := min(desktopW, desktopH) * 0.42
-	dx, dy := x-cx, y-cy
-	d := math.Hypot(dx, dy)
-	return d <= (maxR * lensRatio)
 }

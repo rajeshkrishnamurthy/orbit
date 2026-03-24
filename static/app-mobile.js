@@ -5,6 +5,7 @@
   const mode = window.__MODE__ || 'focus';
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
+  const centerSemantics = readCenterSemantics();
 
   // Read-only companion posture
   if (contextNameEl) contextNameEl.contentEditable = 'false';
@@ -27,8 +28,10 @@
 
   let lens = 'center';
 
-  const DESKTOP_CX = 1272/2;
-  const DESKTOP_CY = 740/2;
+  const DESKTOP_WIDTH = readNumeric(centerSemantics && centerSemantics.desktopWidth, centerSemantics && centerSemantics.canvasWidth, 1272);
+  const DESKTOP_HEIGHT = readNumeric(centerSemantics && centerSemantics.desktopHeight, centerSemantics && centerSemantics.canvasHeight, 740);
+  const DESKTOP_CX = readNumeric(centerSemantics && centerSemantics.centerX, DESKTOP_WIDTH / 2);
+  const DESKTOP_CY = readNumeric(centerSemantics && centerSemantics.centerY, DESKTOP_HEIGHT / 2);
 
   function desktopPolar(item){
     const dx = (item.x || DESKTOP_CX) - DESKTOP_CX;
@@ -44,7 +47,10 @@
 
     filtered.forEach((it) => {
       const { angle: ang, dist } = desktopPolar(it);
-      const desktopMax = Math.hypot(DESKTOP_CX, DESKTOP_CY);
+      const desktopMax = Math.hypot(
+        Math.max(DESKTOP_CX, DESKTOP_WIDTH - DESKTOP_CX),
+        Math.max(DESKTOP_CY, DESKTOP_HEIGHT - DESKTOP_CY),
+      );
       const normDist = Math.min(1, dist / Math.max(1, desktopMax));
       let nx, ny;
 
@@ -81,4 +87,17 @@
 
   render();
   window.addEventListener('resize', render);
+
+  function readCenterSemantics() {
+    const semantics = window.__CENTER_SEMANTICS__;
+    return semantics && typeof semantics === 'object' ? semantics : null;
+  }
+
+  function readNumeric(...values) {
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n)) return n;
+    }
+    return 0;
+  }
 })();

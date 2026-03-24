@@ -5,11 +5,14 @@ export function createLensStateController({
   boundaryEl,
   filtersControls,
   mode,
+  centerSemantics,
   syncCanvasViewportRect,
   syncTouchState,
 }) {
+  const semanticContract = normalizeCenterSemantics(centerSemantics);
+  const canonicalLensRatio = semanticContract ? semanticContract.lensRatio : 0.68;
   let lens = readLensMode();
-  let lensRatio = 0.68;
+  let lensRatio = canonicalLensRatio;
   const lensExempt = new Set();
   let staleLensSnapshot = new Set();
   const staleLensDetachedPins = new Map();
@@ -23,6 +26,7 @@ export function createLensStateController({
   sliderWrap.hidden = true;
   sliderWrap.innerHTML = '<input class="lens-slider" type="range" min="35" max="85" value="68" step="1" aria-label="Lens sensitivity" />';
   const lensSlider = sliderWrap.querySelector('.lens-slider');
+  lensSlider.value = String(Math.round(Math.max(0.35, Math.min(0.85, lensRatio)) * 100));
   lensSlider.addEventListener('input', () => {
     lensRatio = Number(lensSlider.value) / 100;
     updateBoundaryCue(true);
@@ -66,16 +70,31 @@ export function createLensStateController({
   }
 
   function center() {
+    if (semanticContract) {
+      return { x: semanticContract.centerX, y: semanticContract.centerY };
+    }
     return { x: surface.clientWidth / 2, y: surface.clientHeight / 2 };
   }
 
   function maxR() {
+    if (semanticContract) return semanticContract.maxRadius;
     return Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
   }
 
   function proximityFactor(distance) {
     const normalized = Math.min(1, distance / maxR());
     return 1 - normalized;
+  }
+
+  function pinDistanceFromCenter(pin) {
+    const x = parseFloat(pin.style.left) || 0;
+    const y = parseFloat(pin.style.top) || 0;
+    if (semanticContract) {
+      return Math.hypot(x - semanticContract.centerX, y - semanticContract.centerY);
+    }
+    const width = pin.offsetWidth || 180;
+    const height = pin.offsetHeight || 72;
+    return Math.hypot((x + width / 2) - center().x, (y + height / 2) - center().y);
   }
 
   function readStaleLensSnapshot() {
@@ -142,12 +161,8 @@ export function createLensStateController({
 
   function inLens(pin) {
     if (lens === 'all') return true;
-    const width = pin.offsetWidth || 180;
-    const height = pin.offsetHeight || 72;
-    const x = parseFloat(pin.style.left) || 0;
-    const y = parseFloat(pin.style.top) || 0;
-    const distance = Math.hypot((x + width / 2) - center().x, (y + height / 2) - center().y);
-    const cutoff = maxR() * lensRatio;
+    const distance = pinDistanceFromCenter(pin);
+    const cutoff = maxR() * (semanticContract ? canonicalLensRatio : lensRatio);
     if (lens === 'center') return distance <= cutoff;
     return distance > cutoff;
   }
@@ -188,12 +203,8 @@ export function createLensStateController({
   }
 
   function applyDistanceStyle(pin) {
-    const width = pin.offsetWidth || 180;
-    const height = pin.offsetHeight || 72;
-    const x = parseFloat(pin.style.left) || 0;
-    const y = parseFloat(pin.style.top) || 0;
-    const distance = Math.hypot((x + width / 2) - center().x, (y + height / 2) - center().y);
-    const cutoff = maxR() * lensRatio;
+    const distance = pinDistanceFromCenter(pin);
+    const cutoff = maxR() * (semanticContract ? canonicalLensRatio : lensRatio);
     const isCenterBand = distance <= cutoff;
     const proximity = proximityFactor(distance);
 
@@ -261,4 +272,42 @@ export function createLensStateController({
     setDragHalo,
     updateBoundaryCue,
   };
+}
+
+function normalizeCenterSemantics(input) {
+  if (!input || typeof input !== 'object') return null;
+
+  const width = readFiniteNumber(input.width, input.desktopWidth, input.canvasWidth);
+  const height = readFiniteNumber(input.height, input.desktopHeight, input.canvasHeight);
+  if (!(width > 0) || !(height > 0)) return null;
+
+  const centerX = readFiniteNumber(input.centerX, input.cx);
+  const centerY = readFiniteNumber(input.centerY, input.cy);
+  const maxRadius = readFiniteNumber(input.maxRadius);
+  const maxRadiusRatio = readFiniteNumber(input.maxRadiusRatio, input.radiusRatio, input.radiusScale);
+  const lensRatio = readFiniteNumber(input.lensRatio, input.centerRatio);
+
+  const resolvedCenterX = Number.isFinite(centerX) ? centerX : (width / 2);
+  const resolvedCenterY = Number.isFinite(centerY) ? centerY : (height / 2);
+  const resolvedMaxRadius = Number.isFinite(maxRadius)
+    ? maxRadius
+    : (Math.min(width, height) * (Number.isFinite(maxRadiusRatio) ? maxRadiusRatio : 0.42));
+  const resolvedLensRatio = Math.max(0.35, Math.min(0.85, Number.isFinite(lensRatio) ? lensRatio : 0.68));
+
+  return {
+    width,
+    height,
+    centerX: resolvedCenterX,
+    centerY: resolvedCenterY,
+    maxRadius: resolvedMaxRadius,
+    lensRatio: resolvedLensRatio,
+  };
+}
+
+function readFiniteNumber(...values) {
+  for (const value of values) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return NaN;
 }
