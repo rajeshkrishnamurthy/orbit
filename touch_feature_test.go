@@ -1,11 +1,19 @@
 package orbit
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 type touchCardView struct {
@@ -338,6 +346,110 @@ func TestHiddenTouchCardsPreserveLastTouchedDayThroughUnhide(t *testing.T) {
 	}
 }
 
+func TestListReadersUseSetBasedTouchDerivationWithoutConnectionFanout(t *testing.T) {
+	t.Run("snapshot", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "snapshot", 300*time.Millisecond, func() ([]Item, error) {
+			return s.snapshot("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-visible-active",
+			Active:         true,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   3,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         false,
+		})
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-visible-stale",
+			Active:         false,
+			Stale:          true,
+			TouchedToday:   false,
+			TouchCount7d:   0,
+			LastTouchedDay: localDayOffset(7),
+			Hidden:         false,
+		})
+	})
+
+	t.Run("hidden items", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "hiddenItems", 300*time.Millisecond, func() ([]Item, error) {
+			return s.hiddenItems("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("hiddenItems: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-hidden",
+			Active:         false,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   2,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         true,
+		})
+	})
+
+	t.Run("reveal all hidden", func(t *testing.T) {
+		s := newOwnedTestStore(t)
+		s.db.SetMaxOpenConns(1)
+		s.db.SetMaxIdleConns(1)
+		seedTouchListReadFixture(t, s)
+
+		items, err := mustCompleteListReadWithin(t, s, "revealAllHidden", 300*time.Millisecond, func() ([]Item, error) {
+			return s.revealAllHidden("main-orbit")
+		})
+		if err != nil {
+			t.Fatalf("revealAllHidden: %v", err)
+		}
+		assertTouchView(t, items, touchCardView{
+			ID:             "touch-list-hidden",
+			Active:         true,
+			Stale:          false,
+			TouchedToday:   true,
+			TouchCount7d:   2,
+			LastTouchedDay: localDayOffset(0),
+			Hidden:         false,
+		})
+	})
+}
+
+func TestListReadersUseDeterministicConstantQueryBudgets(t *testing.T) {
+	// These budgets intentionally encode the set-based contract:
+	// one base list query + one aggregate touch summary query (+ one reveal update).
+	const (
+		smallCardinality = 1
+		largeCardinality = 16
+	)
+	t.Run("snapshot", func(t *testing.T) {
+		small := measureListReadQueryBudget(t, "snapshot", smallCardinality)
+		large := measureListReadQueryBudget(t, "snapshot", largeCardinality)
+		assertConstantBudget(t, "snapshot", small, large, sqlBudget{queries: 2, execs: 0})
+	})
+	t.Run("hidden items", func(t *testing.T) {
+		small := measureListReadQueryBudget(t, "hiddenItems", smallCardinality)
+		large := measureListReadQueryBudget(t, "hiddenItems", largeCardinality)
+		assertConstantBudget(t, "hiddenItems", small, large, sqlBudget{queries: 2, execs: 0})
+	})
+	t.Run("reveal all hidden", func(t *testing.T) {
+		small := measureListReadQueryBudget(t, "revealAllHidden", smallCardinality)
+		large := measureListReadQueryBudget(t, "revealAllHidden", largeCardinality)
+		assertConstantBudget(t, "revealAllHidden", small, large, sqlBudget{queries: 2, execs: 1})
+	})
+}
+
 func mustCastTouchViews(t *testing.T, items []Item) []touchCardView {
 	t.Helper()
 	b, err := json.Marshal(items)
@@ -469,4 +581,366 @@ func assertTouchDerivationCase(t *testing.T, s *Store, id, title string, x, y fl
 	if view.Active != wantActive || view.Stale != wantStale || view.TouchCount7d != wantCount {
 		t.Fatalf("unexpected derived touch state: %#v", view)
 	}
+}
+
+func newOwnedTestStore(t *testing.T) *Store {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "orbit.db")
+	s, err := newStore(dbPath)
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.db.Close()
+	})
+	return s
+}
+
+func seedTouchListReadFixture(t *testing.T, s *Store) {
+	t.Helper()
+	now := time.Now()
+	if err := s.update(Item{
+		ID:        "touch-list-visible-active",
+		ContextID: "main-orbit",
+		Title:     "visible active",
+		X:         620,
+		Y:         300,
+		Color:     "var(--c1)",
+	}); err != nil {
+		t.Fatalf("seed visible active: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-visible-active", 8)
+	insertTouchFact(t, s, "touch-list-visible-active", 0, now)
+	insertTouchFact(t, s, "touch-list-visible-active", 1, now)
+	insertTouchFact(t, s, "touch-list-visible-active", 2, now)
+
+	if err := s.update(Item{
+		ID:        "touch-list-visible-stale",
+		ContextID: "main-orbit",
+		Title:     "visible stale",
+		X:         1080,
+		Y:         320,
+		Color:     "var(--c2)",
+	}); err != nil {
+		t.Fatalf("seed visible stale: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-visible-stale", 8)
+	insertTouchFact(t, s, "touch-list-visible-stale", 7, now)
+
+	if err := s.update(Item{
+		ID:        "touch-list-hidden",
+		ContextID: "main-orbit",
+		Title:     "hidden",
+		X:         620,
+		Y:         300,
+		Color:     "var(--c3)",
+	}); err != nil {
+		t.Fatalf("seed hidden: %v", err)
+	}
+	if err := s.hide("touch-list-hidden", "main-orbit"); err != nil {
+		t.Fatalf("hide seeded hidden card: %v", err)
+	}
+	ageItemCreatedAt(t, s, "touch-list-hidden", 8)
+	insertTouchFact(t, s, "touch-list-hidden", 0, now)
+	insertTouchFact(t, s, "touch-list-hidden", 1, now)
+}
+
+func assertTouchView(t *testing.T, items []Item, want touchCardView) {
+	t.Helper()
+	got := findTouchView(t, mustCastTouchViews(t, items), want.ID)
+	if got.Active != want.Active || got.Stale != want.Stale || got.TouchedToday != want.TouchedToday ||
+		got.TouchCount7d != want.TouchCount7d || got.LastTouchedDay != want.LastTouchedDay || got.Hidden != want.Hidden {
+		t.Fatalf("unexpected touch view for %s: got=%#v want=%#v", want.ID, got, want)
+	}
+}
+
+func mustCompleteListReadWithin(t *testing.T, s *Store, label string, timeout time.Duration, fn func() ([]Item, error)) ([]Item, error) {
+	t.Helper()
+	type result struct {
+		items []Item
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		items, err := fn()
+		done <- result{items: items, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res.items, res.err
+	case <-time.After(timeout):
+		s.db.SetMaxOpenConns(4)
+		s.db.SetMaxIdleConns(4)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		t.Fatalf("%s did not finish within %s with max_open_conns=1; likely per-item nested DB reads in list derivation", label, timeout)
+		return nil, nil
+	}
+}
+
+type sqlBudget struct {
+	queries int64
+	execs   int64
+}
+
+func (b sqlBudget) String() string {
+	return fmt.Sprintf("{queries=%d execs=%d}", b.queries, b.execs)
+}
+
+func assertConstantBudget(t *testing.T, label string, small, large, want sqlBudget) {
+	t.Helper()
+	if small != large {
+		t.Fatalf("%s query budget scaled with cardinality: small=%s large=%s", label, small.String(), large.String())
+	}
+	if small != want {
+		t.Fatalf("%s query budget mismatch: got=%s want=%s", label, small.String(), want.String())
+	}
+}
+
+func measureListReadQueryBudget(t *testing.T, path string, itemCount int) sqlBudget {
+	t.Helper()
+	s, counter := newCountedTestStore(t)
+	switch path {
+	case "snapshot":
+		seedQueryBudgetFixture(t, s, itemCount, false)
+		counter.reset()
+		if _, err := s.snapshot("main-orbit"); err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+	case "hiddenItems":
+		seedQueryBudgetFixture(t, s, itemCount, true)
+		counter.reset()
+		if _, err := s.hiddenItems("main-orbit"); err != nil {
+			t.Fatalf("hiddenItems: %v", err)
+		}
+	case "revealAllHidden":
+		seedQueryBudgetFixture(t, s, itemCount, true)
+		counter.reset()
+		if _, err := s.revealAllHidden("main-orbit"); err != nil {
+			t.Fatalf("revealAllHidden: %v", err)
+		}
+	default:
+		t.Fatalf("unsupported path %q", path)
+	}
+	return counter.snapshot()
+}
+
+func seedQueryBudgetFixture(t *testing.T, s *Store, itemCount int, hidden bool) {
+	t.Helper()
+	now := time.Now()
+	for i := 0; i < itemCount; i++ {
+		id := fmt.Sprintf("touch-query-budget-%t-%d", hidden, i)
+		x := 1080.0
+		if i%2 == 0 {
+			x = 620.0
+		}
+		if err := s.update(Item{
+			ID:        id,
+			ContextID: "main-orbit",
+			Title:     id,
+			X:         x,
+			Y:         320,
+			Color:     "var(--c1)",
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+		ageItemCreatedAt(t, s, id, 8)
+		insertTouchFact(t, s, id, i%5, now)
+		if hidden {
+			if err := s.hide(id, "main-orbit"); err != nil {
+				t.Fatalf("hide seeded %s: %v", id, err)
+			}
+		}
+	}
+}
+
+type countedSQLDriver struct {
+	base    driver.Driver
+	counter *sqlCounter
+}
+
+func (d *countedSQLDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.base.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("open counted connection %q: %w", name, err)
+	}
+	return &countedConn{Conn: conn, counter: d.counter}, nil
+}
+
+type countedConn struct {
+	driver.Conn
+	counter *sqlCounter
+}
+
+func (c *countedConn) Prepare(query string) (driver.Stmt, error) {
+	stmt, err := c.Conn.Prepare(query)
+	if err != nil {
+		return nil, fmt.Errorf("prepare counted statement: %w", err)
+	}
+	return &countedStmt{Stmt: stmt, counter: c.counter}, nil
+}
+
+func (c *countedConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if prepCtx, ok := c.Conn.(driver.ConnPrepareContext); ok {
+		stmt, err := prepCtx.PrepareContext(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("prepare counted statement with context: %w", err)
+		}
+		return &countedStmt{Stmt: stmt, counter: c.counter}, nil
+	}
+	return c.Prepare(query)
+}
+
+func (c *countedConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	if beginTx, ok := c.Conn.(driver.ConnBeginTx); ok {
+		tx, err := beginTx.BeginTx(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("begin counted transaction: %w", err)
+		}
+		return tx, nil
+	}
+	return nil, fmt.Errorf("counted connection does not implement ConnBeginTx")
+}
+
+func (c *countedConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	queryCtx, ok := c.Conn.(driver.QueryerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	c.counter.incQuery()
+	rows, err := queryCtx.QueryContext(ctx, query, args)
+	if err != nil {
+		return nil, fmt.Errorf("query counted context statement: %w", err)
+	}
+	return rows, nil
+}
+
+func (c *countedConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	execCtx, ok := c.Conn.(driver.ExecerContext)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	c.counter.incExec()
+	result, err := execCtx.ExecContext(ctx, query, args)
+	if err != nil {
+		return nil, fmt.Errorf("exec counted context statement: %w", err)
+	}
+	return result, nil
+}
+
+type countedStmt struct {
+	driver.Stmt
+	counter *sqlCounter
+}
+
+func (s *countedStmt) Exec(args []driver.Value) (driver.Result, error) {
+	s.counter.incExec()
+	//nolint:staticcheck // driver.Stmt requires Exec; this wrapper forwards to the underlying driver stmt.
+	result, err := s.Stmt.Exec(args)
+	if err != nil {
+		return nil, fmt.Errorf("exec counted stmt: %w", err)
+	}
+	return result, nil
+}
+
+func (s *countedStmt) Query(args []driver.Value) (driver.Rows, error) {
+	s.counter.incQuery()
+	//nolint:staticcheck // driver.Stmt requires Query; this wrapper forwards to the underlying driver stmt.
+	rows, err := s.Stmt.Query(args)
+	if err != nil {
+		return nil, fmt.Errorf("query counted stmt: %w", err)
+	}
+	return rows, nil
+}
+
+func (s *countedStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	stmtExecCtx, ok := s.Stmt.(driver.StmtExecContext)
+	if ok {
+		s.counter.incExec()
+		result, err := stmtExecCtx.ExecContext(ctx, args)
+		if err != nil {
+			return nil, fmt.Errorf("exec counted stmt with context: %w", err)
+		}
+		return result, nil
+	}
+	return nil, driver.ErrSkip
+}
+
+func (s *countedStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	stmtQueryCtx, ok := s.Stmt.(driver.StmtQueryContext)
+	if ok {
+		s.counter.incQuery()
+		rows, err := stmtQueryCtx.QueryContext(ctx, args)
+		if err != nil {
+			return nil, fmt.Errorf("query counted stmt with context: %w", err)
+		}
+		return rows, nil
+	}
+	return nil, driver.ErrSkip
+}
+
+type sqlCounter struct {
+	queries atomic.Int64
+	execs   atomic.Int64
+}
+
+func (c *sqlCounter) incQuery() {
+	c.queries.Add(1)
+}
+
+func (c *sqlCounter) incExec() {
+	c.execs.Add(1)
+}
+
+func (c *sqlCounter) reset() {
+	c.queries.Store(0)
+	c.execs.Store(0)
+}
+
+func (c *sqlCounter) snapshot() sqlBudget {
+	return sqlBudget{
+		queries: c.queries.Load(),
+		execs:   c.execs.Load(),
+	}
+}
+
+var countedDriverID atomic.Int64
+
+func newCountedTestStore(t *testing.T) (*Store, *sqlCounter) {
+	t.Helper()
+	driverName := fmt.Sprintf("sqlite-counted-%d", countedDriverID.Add(1))
+	counter := &sqlCounter{}
+	sql.Register(driverName, &countedSQLDriver{base: &sqlite.Driver{}, counter: counter})
+	dbPath := filepath.Join(t.TempDir(), "orbit.db")
+	db, err := sql.Open(driverName, dbPath)
+	if err != nil {
+		t.Fatalf("open counted sqlite database: %v", err)
+	}
+	for _, pragma := range []string{
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = FULL`,
+		`PRAGMA busy_timeout = 5000`,
+		`PRAGMA foreign_keys = ON`,
+	} {
+		if _, err := db.Exec(pragma); err != nil {
+			t.Fatalf("set sqlite pragma %q: %v", pragma, err)
+		}
+	}
+	s := &Store{db: db}
+	if err := s.ensureSchema(); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	if err := s.ensureDefaultContext(); err != nil {
+		t.Fatalf("ensure default context: %v", err)
+	}
+	if err := s.ensureItemsContext(); err != nil {
+		t.Fatalf("ensure items context: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = s.db.Close()
+	})
+	return s, counter
 }
