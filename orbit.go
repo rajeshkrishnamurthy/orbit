@@ -60,8 +60,16 @@ type Store struct {
 }
 
 type App struct {
-	tpl   *template.Template
-	store *Store
+	tpl     *template.Template
+	store   *Store
+	service *AppService
+}
+
+func (a *App) appService() *AppService {
+	if a.service == nil {
+		a.service = newAppService(a.store)
+	}
+	return a.service
 }
 
 func seedItems() []Item {
@@ -97,7 +105,7 @@ func newMux() (*http.ServeMux, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create store: %w", err)
 	}
-	app := &App{tpl: tpl, store: store}
+	app := &App{tpl: tpl, store: store, service: newAppService(store)}
 
 	staticFS, err := fs.Sub(embeddedAssets, "static")
 	if err != nil {
@@ -145,51 +153,62 @@ func RunWeb(autoOpenBrowser bool) error {
 	return nil
 }
 
+type apiErrorPolicy struct {
+	notFoundErr     error
+	notFoundMessage string
+	defaultStatus   int
+}
+
+func writeAPIError(w http.ResponseWriter, err error, p apiErrorPolicy) {
+	if p.notFoundErr != nil && errors.Is(err, p.notFoundErr) {
+		http.Error(w, p.notFoundMessage, http.StatusNotFound)
+		return
+	}
+	status := p.defaultStatus
+	if status == 0 {
+		status = http.StatusInternalServerError
+	}
+	http.Error(w, err.Error(), status)
+}
+
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
-	mobileMode := isMobileRequest(r)
-	canvas := r.URL.Query().Get("canvas")
-	ctxID := contextOrDefault(r.URL.Query().Get("ctx"))
-	if canvas == "contexts" {
-		contexts, err := a.store.contexts()
+	resp, err := a.appService().Home(HomeRequest{
+		Canvas:     r.URL.Query().Get("canvas"),
+		ContextID:  r.URL.Query().Get("ctx"),
+		MobileMode: isMobileRequest(r),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var itemsJSON template.JS
+	if resp.Mode == "contexts" {
+		b, err := json.Marshal(resp.Contexts)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		b, err := json.Marshal(contexts)
+		itemsJSON = template.JS(b)
+	} else {
+		b, err := json.Marshal(resp.Items)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": 0, "Mode": "contexts", "CurrentContextID": ctxID, "CurrentContextTitle": "Your Contexts", "MobileMode": mobileMode}); err != nil {
-			log.Printf("render contexts home: %v", err)
-		}
-		return
+		itemsJSON = template.JS(b)
 	}
-	cur, err := a.store.contextByID(ctxID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	items, err := a.store.snapshot(ctxID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	hiddenN, err := a.store.hiddenCount(ctxID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	b, err := json.Marshal(items)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if err := a.tpl.Execute(w, map[string]any{"ItemsJSON": template.JS(b), "HiddenCount": hiddenN, "Mode": "focus", "CurrentContextID": cur.ID, "CurrentContextTitle": cur.Title, "MobileMode": mobileMode}); err != nil {
+	if err := a.tpl.Execute(w, map[string]any{
+		"ItemsJSON":           itemsJSON,
+		"HiddenCount":         resp.HiddenCount,
+		"Mode":                resp.Mode,
+		"CurrentContextID":    resp.CurrentContextID,
+		"CurrentContextTitle": resp.CurrentContextTitle,
+		"MobileMode":          resp.MobileMode,
+	}); err != nil {
 		log.Printf("render focus home: %v", err)
 	}
 }
@@ -201,23 +220,20 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	var item Item
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if item.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.store.update(item); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	resp, err := a.appService().UpsertItem(UpsertItemRequest{Item: item})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	state, err := a.store.touchItemState(item.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	state := resp.State
 	if err := json.NewEncoder(w).Encode(map[string]any{
 		"ok":             true,
 		"id":             state.ID,
@@ -241,19 +257,19 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.store.delete(in.ID); err != nil {
-		if errors.Is(err, errWriteTargetNotFound) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := a.appService().DeleteItem(DeleteItemRequest{ID: in.ID}); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -272,23 +288,22 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		Completed *bool  `json:"completed"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	completed := true
-	if in.Completed != nil {
-		completed = *in.Completed
-	}
-	if err := a.store.setCompleted(in.ID, completed); err != nil {
-		if errors.Is(err, errWriteTargetNotFound) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := a.appService().SetItemCompleted(CompleteItemRequest{
+		ID:        in.ID,
+		Completed: in.Completed,
+	}); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -319,26 +334,27 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	item, touched, err := a.store.touchCard(in.ID)
+	resp, err := a.appService().TouchItem(TouchItemRequest{ID: in.ID})
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     sql.ErrNoRows,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	item := resp.State
 	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
-		Touched:        touched,
+		Touched:        resp.Touched,
 		ID:             item.ID,
 		Active:         item.Active,
 		Stale:          item.Stale,
@@ -360,26 +376,27 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		ID string `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	item, undone, err := a.store.undoTouchCard(in.ID)
+	resp, err := a.appService().UndoTouchItem(UndoTouchItemRequest{ID: in.ID})
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     sql.ErrNoRows,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	item := resp.State
 	if err := json.NewEncoder(w).Encode(touchItemAPIResponse{
 		Ok:             true,
-		Undone:         undone,
+		Undone:         resp.Undone,
 		ID:             item.ID,
 		Active:         item.Active,
 		Stale:          item.Stale,
@@ -402,28 +419,27 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		ContextID string `json:"contextId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.store.hide(in.ID, in.ContextID); err != nil {
-		if errors.Is(err, errWriteTargetNotFound) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	hiddenN, err := a.store.hiddenCount(in.ContextID)
+	resp, err := a.appService().HideItem(HideItemRequest{
+		ID:        in.ID,
+		ContextID: in.ContextID,
+	})
 	if err != nil {
-		log.Printf("hiddenCount after hide failed: %v", err)
-		hiddenN = 0
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, hiddenN))); err != nil {
+	if _, err := w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, resp.HiddenCount))); err != nil {
 		log.Printf("write hideItemAPI response: %v", err)
 	}
 }
@@ -439,14 +455,14 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("decode revealAllAPI request: %v", err)
 	}
-	items, err := a.store.revealAllHidden(in.ContextID)
+	resp, err := a.appService().RevealAllHidden(RevealAllHiddenRequest{ContextID: in.ContextID})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
-	b, err := json.Marshal(map[string]any{"ok": true, "items": items, "hiddenCount": 0})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": resp.Items, "hiddenCount": resp.HiddenCount})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -466,14 +482,14 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("decode hiddenItemsAPI request: %v", err)
 	}
-	items, err := a.store.hiddenItems(in.ContextID)
+	resp, err := a.appService().HiddenItems(HiddenItemsRequest{ContextID: in.ContextID})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
-	b, err := json.Marshal(map[string]any{"ok": true, "items": items})
+	b, err := json.Marshal(map[string]any{"ok": true, "items": resp.Items})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -494,35 +510,31 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		Y         float64 `json:"y"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 	if in.ID == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.store.unhideAt(in.ID, in.ContextID, in.X, in.Y); err != nil {
-		if errors.Is(err, errWriteTargetNotFound) {
-			http.Error(w, "item not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	item, err := a.store.touchItemState(in.ID)
+	resp, err := a.appService().UnhideAt(UnhideAtRequest{
+		ID:        in.ID,
+		ContextID: in.ContextID,
+		X:         in.X,
+		Y:         in.Y,
+	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
 		return
-	}
-	hiddenN, err := a.store.hiddenCount(in.ContextID)
-	if err != nil {
-		log.Printf("hiddenCount after unhide failed: %v", err)
-		hiddenN = 0
 	}
 	w.Header().Set("Content-Type", "application/json")
-	b, err := json.Marshal(map[string]any{"ok": true, "hiddenCount": hiddenN, "item": item})
+	b, err := json.Marshal(map[string]any{"ok": true, "hiddenCount": resp.HiddenCount, "item": resp.Item})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	if _, err := w.Write(b); err != nil {
@@ -547,53 +559,6 @@ func decodeContextUpsertInput(r *http.Request) (contextUpsertInput, error) {
 	return in, nil
 }
 
-func buildContextForUpsert(store *Store, in contextUpsertInput) (Context, error) {
-	id := strings.TrimSpace(in.ID)
-	if id == "" {
-		id = fmt.Sprintf("c_%d", time.Now().UnixNano())
-	}
-
-	c := Context{
-		ID:      id,
-		Title:   "Untitled context",
-		SubNote: "",
-		X:       560.0,
-		Y:       320.0,
-		Color:   "var(--c1)",
-	}
-
-	existing, err := store.contextByID(id)
-	if err == nil {
-		c = *existing
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Context{}, err
-	}
-
-	if in.Title != nil {
-		c.Title = strings.TrimSpace(*in.Title)
-	}
-	if c.Title == "" {
-		c.Title = "Untitled context"
-	}
-	if in.SubNote != nil {
-		c.SubNote = *in.SubNote
-	}
-	if in.X != nil {
-		c.X = *in.X
-	}
-	if in.Y != nil {
-		c.Y = *in.Y
-	}
-	if in.Color != nil {
-		c.Color = strings.TrimSpace(*in.Color)
-	}
-	if c.Color == "" {
-		c.Color = "var(--c1)"
-	}
-
-	return c, nil
-}
-
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -601,22 +566,24 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	in, err := decodeContextUpsertInput(r)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 
-	c, err := buildContextForUpsert(a.store, in)
+	resp, err := a.appService().UpsertContext(ContextUpsertRequest{
+		ID:      in.ID,
+		Title:   in.Title,
+		SubNote: in.SubNote,
+		X:       in.X,
+		Y:       in.Y,
+		Color:   in.Color,
+	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if err := a.store.upsertContext(c); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write([]byte(`{"ok":true,"id":"` + c.ID + `"}`)); err != nil {
+	if _, err := w.Write([]byte(`{"ok":true,"id":"` + resp.ID + `"}`)); err != nil {
 		log.Printf("write contextsAPI response: %v", err)
 	}
 }
@@ -629,7 +596,7 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 			ID string `json:"id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 			return
 		}
 		id = in.ID
@@ -640,15 +607,15 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if id == "" {
-		http.Error(w, "id required", http.StatusBadRequest)
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.store.deleteContext(id); err != nil {
-		if errors.Is(err, errWriteTargetNotFound) {
-			http.Error(w, "context not found", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := a.appService().DeleteContext(DeleteContextRequest{ID: id}); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "context not found",
+			defaultStatus:   http.StatusBadRequest,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
