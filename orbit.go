@@ -166,24 +166,56 @@ type apiErrorPolicy struct {
 	defaultStatus   int
 }
 
-func writeAPIError(w http.ResponseWriter, err error, p apiErrorPolicy) {
+type apiErrorBody struct {
+	OK    bool         `json:"ok"`
+	Error apiErrorInfo `json:"error"`
+}
+
+type apiErrorInfo struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func classifyAPIError(err error, p apiErrorPolicy) (int, apiErrorInfo, bool) {
 	if errors.Is(err, context.DeadlineExceeded) {
-		http.Error(w, "request timed out", http.StatusRequestTimeout)
-		return
+		return http.StatusRequestTimeout, apiErrorInfo{Code: "request_timeout", Message: "request timed out"}, false
 	}
 	if errors.Is(err, context.Canceled) {
-		http.Error(w, "request canceled", http.StatusRequestTimeout)
-		return
+		return http.StatusRequestTimeout, apiErrorInfo{Code: "request_canceled", Message: "request canceled"}, false
 	}
 	if p.notFoundErr != nil && errors.Is(err, p.notFoundErr) {
-		http.Error(w, p.notFoundMessage, http.StatusNotFound)
-		return
+		return http.StatusNotFound, apiErrorInfo{Code: "not_found", Message: p.notFoundMessage}, false
 	}
 	status := p.defaultStatus
 	if status == 0 {
 		status = http.StatusInternalServerError
 	}
-	http.Error(w, err.Error(), status)
+	switch status {
+	case http.StatusBadRequest:
+		return status, apiErrorInfo{Code: "bad_request", Message: strings.TrimSpace(err.Error())}, false
+	default:
+		return status, apiErrorInfo{Code: "internal_error", Message: "internal server error"}, true
+	}
+}
+
+func writeAPIError(w http.ResponseWriter, err error, p apiErrorPolicy) {
+	status, body, shouldLog := classifyAPIError(err, p)
+	if shouldLog {
+		log.Printf("api error: %v", err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if encodeErr := json.NewEncoder(w).Encode(apiErrorBody{OK: false, Error: body}); encodeErr != nil {
+		log.Printf("encode api error response: %v", encodeErr)
+	}
+}
+
+func writePageError(w http.ResponseWriter, err error, p apiErrorPolicy) {
+	status, body, shouldLog := classifyAPIError(err, p)
+	if shouldLog {
+		log.Printf("page error: %v", err)
+	}
+	http.Error(w, body.Message, status)
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -199,21 +231,21 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		MobileMode: isMobileRequest(r),
 	})
 	if err != nil {
-		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	var itemsJSON template.JS
 	if resp.Mode == "contexts" {
 		b, err := json.Marshal(resp.Contexts)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 			return
 		}
 		itemsJSON = template.JS(b)
 	} else {
 		b, err := json.Marshal(resp.Items)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 			return
 		}
 		itemsJSON = template.JS(b)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -54,6 +55,24 @@ func mustDecodeJSON[T any](t *testing.T, rr *httptest.ResponseRecorder) T {
 		t.Fatalf("decode response json: %v (body=%q)", err, rr.Body.String())
 	}
 	return out
+}
+
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	prevPrefix := log.Prefix()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+		log.SetPrefix(prevPrefix)
+	}()
+	fn()
+	return buf.String()
 }
 
 func newTestApp(t *testing.T) (*App, *Store) {
@@ -1577,6 +1596,76 @@ func TestHomeNotFoundAndErrorBranches(t *testing.T) {
 			t.Fatalf("expected 500, got %d: %s", rr.Code, rr.Body.String())
 		}
 	})
+}
+
+func TestWriteAPIErrorSanitizesInternalFailuresAndLogsDiagnostics(t *testing.T) {
+	rr := httptest.NewRecorder()
+	logs := captureLogs(t, func() {
+		writeAPIError(rr, errors.New("sqlite busy: secret internal detail"), apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+	})
+
+	assertJSONResponse(t, rr, http.StatusInternalServerError)
+	resp := mustDecodeJSON[apiErrorBody](t, rr)
+	if resp.OK {
+		t.Fatalf("expected ok=false")
+	}
+	if resp.Error.Code != "internal_error" {
+		t.Fatalf("unexpected error code: %q", resp.Error.Code)
+	}
+	if resp.Error.Message != "internal server error" {
+		t.Fatalf("unexpected error message: %q", resp.Error.Message)
+	}
+	if strings.Contains(rr.Body.String(), "secret internal detail") {
+		t.Fatalf("internal error detail leaked to client: %s", rr.Body.String())
+	}
+	if !strings.Contains(logs, "sqlite busy: secret internal detail") {
+		t.Fatalf("expected internal diagnostics in logs, got %q", logs)
+	}
+}
+
+func TestHiddenItemsAPIInternalErrorsUseStableJSONContract(t *testing.T) {
+	app, s := newTestApp(t)
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	var logs string
+	rr := httptest.NewRecorder()
+	logs = captureLogs(t, func() {
+		rr = postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": "main-orbit"})
+	})
+
+	assertJSONResponse(t, rr, http.StatusInternalServerError)
+	resp := mustDecodeJSON[apiErrorBody](t, rr)
+	if resp.OK {
+		t.Fatalf("expected ok=false")
+	}
+	if resp.Error.Code != "internal_error" || resp.Error.Message != "internal server error" {
+		t.Fatalf("unexpected error contract: %+v", resp.Error)
+	}
+	if strings.Contains(rr.Body.String(), "sql: database is closed") {
+		t.Fatalf("raw internal error leaked to client: %s", rr.Body.String())
+	}
+	if !strings.Contains(logs, "sql: database is closed") {
+		t.Fatalf("expected database error in logs, got %q", logs)
+	}
+}
+
+func TestDeleteItemAPIMissingIDUsesStableBadRequestContract(t *testing.T) {
+	app, _ := newTestApp(t)
+	rr := postJSON(t, app.deleteItemAPI, map[string]any{})
+
+	assertJSONResponse(t, rr, http.StatusBadRequest)
+	resp := mustDecodeJSON[apiErrorBody](t, rr)
+	if resp.OK {
+		t.Fatalf("expected ok=false")
+	}
+	if resp.Error.Code != "bad_request" {
+		t.Fatalf("unexpected error code: %q", resp.Error.Code)
+	}
+	if resp.Error.Message != "id required" {
+		t.Fatalf("unexpected error message: %q", resp.Error.Message)
+	}
 }
 
 func TestContextsAPIGeneratedIDDefaultsAndFieldFallbacks(t *testing.T) {
