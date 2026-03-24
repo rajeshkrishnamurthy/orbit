@@ -19,6 +19,7 @@ void (async () => {
   const items = window.__ITEMS__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
+  const centerSemantics = readCenterSemantics();
   const UNDO_WINDOW_MS = 6000;
   let activePin = null;
   let undoState = null;
@@ -32,6 +33,20 @@ void (async () => {
   let lensState = null;
   let hiddenTrayState = null;
   let dragDropState = null;
+
+  function readCenterSemantics() {
+    const candidates = [
+      window.__CENTER_SEMANTICS__,
+      window.__CENTER_PERIPHERY_SEMANTICS__,
+      window.__CENTER_PERIPHERY_CONTRACT__,
+      window.__DESKTOP_GEOMETRY__,
+      window.__CENTER_BAND_GEOMETRY__,
+    ];
+    for (const value of candidates) {
+      if (value && typeof value === 'object') return value;
+    }
+    return null;
+  }
 
   function syncCanvasViewportRect(){
     const rect = surface.getBoundingClientRect();
@@ -267,6 +282,7 @@ void (async () => {
     boundaryEl,
     filtersControls,
     mode,
+    centerSemantics,
     syncCanvasViewportRect,
     syncTouchState,
   });
@@ -773,6 +789,7 @@ void (async () => {
     if (typeof data.lastTouchedDay === 'string') pin.dataset.lastTouchedDay = data.lastTouchedDay;
     if (typeof data.active === 'boolean') pin.dataset.active = data.active ? 'true' : 'false';
     if (typeof data.stale === 'boolean') pin.dataset.stale = data.stale ? 'true' : 'false';
+    if (typeof data.inCenter === 'boolean') pin.dataset.inCenter = data.inCenter ? 'true' : 'false';
     syncTouchState(pin);
   }
 

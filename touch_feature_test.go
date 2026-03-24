@@ -836,10 +836,21 @@ type countedStmt struct {
 	counter *sqlCounter
 }
 
+type countedStmtExecer interface {
+	Exec(args []driver.Value) (driver.Result, error)
+}
+
+type countedStmtQueryer interface {
+	Query(args []driver.Value) (driver.Rows, error)
+}
+
 func (s *countedStmt) Exec(args []driver.Value) (driver.Result, error) {
 	s.counter.incExec()
-	//nolint:staticcheck // driver.Stmt requires Exec; this wrapper forwards to the underlying driver stmt.
-	result, err := s.Stmt.Exec(args)
+	stmtExecer, ok := s.Stmt.(countedStmtExecer)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	result, err := stmtExecer.Exec(args)
 	if err != nil {
 		return nil, fmt.Errorf("exec counted stmt: %w", err)
 	}
@@ -848,8 +859,11 @@ func (s *countedStmt) Exec(args []driver.Value) (driver.Result, error) {
 
 func (s *countedStmt) Query(args []driver.Value) (driver.Rows, error) {
 	s.counter.incQuery()
-	//nolint:staticcheck // driver.Stmt requires Query; this wrapper forwards to the underlying driver stmt.
-	rows, err := s.Stmt.Query(args)
+	stmtQueryer, ok := s.Stmt.(countedStmtQueryer)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	rows, err := stmtQueryer.Query(args)
 	if err != nil {
 		return nil, fmt.Errorf("query counted stmt: %w", err)
 	}

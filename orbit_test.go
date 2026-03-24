@@ -1763,9 +1763,10 @@ func TestDeleteContextAPIGetDeletesContext(t *testing.T) {
 }
 
 func TestClassifyDesktopBandBoundaryGeometry(t *testing.T) {
-	const cx = 1272.0 / 2.0
-	const cy = 740.0 / 2.0
-	const radius = 740.0 * 0.42 * 0.68
+	contract := centerPeripherySemantics()
+	cx := contract.DesktopWidth / 2.0
+	cy := contract.DesktopHeight / 2.0
+	radius := min(contract.DesktopWidth, contract.DesktopHeight) * contract.RadiusScale * contract.LensRatio
 
 	if !classifyDesktopBand(cx, cy) {
 		t.Fatalf("center point must classify as in-center")
