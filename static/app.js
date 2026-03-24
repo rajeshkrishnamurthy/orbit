@@ -1,4 +1,13 @@
-(() => {
+void (async () => {
+  const [
+    {createLensStateController},
+    {createHiddenTrayController},
+    {createDragDropController},
+  ] = await Promise.all([
+    import('/static/lens_state.js'),
+    import('/static/hidden_tray_state.js'),
+    import('/static/drag_drop_state.js'),
+  ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
   const surface = document.getElementById('surface');
@@ -11,21 +20,8 @@
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const UNDO_WINDOW_MS = 6000;
-  const DRAG_THRESHOLD_PX = 5;
-  const LENS_MODE_STORAGE_KEY = 'orbit.lens-mode';
-  let hiddenCount = window.__HIDDEN_COUNT__ || 0;
-  let lens = readLensMode();
-  let lensRatio = 0.68;
-  const lensExempt = new Set();
-  let staleLensSnapshot = new Set();
-  const staleLensDetachedPins = new Map();
-  let dragHaloActive = false;
   let activePin = null;
   let undoState = null;
-  let trayOpen = false;
-  let hiddenItemsCache = [];
-  const pendingUnhide = new Map();
-  let hiddenDragPreview = null;
   const completionTransitions = new Map();
   const palette = ['var(--c1)','var(--c2)','var(--c3)','var(--c4)','var(--c5)'];
   let canvasViewportRect = null;
@@ -33,6 +29,9 @@
   let filtersPanel = null;
   let filtersTray = null;
   let swatchRail = null;
+  let lensState = null;
+  let hiddenTrayState = null;
+  let dragDropState = null;
 
   function syncCanvasViewportRect(){
     const rect = surface.getBoundingClientRect();
@@ -163,23 +162,6 @@
     swatchRail.appendChild(b);
   });
 
-  const hiddenBtn = document.createElement('button');
-  hiddenBtn.className = 'hidden-toggle';
-  hiddenBtn.id = 'hidden-toggle';
-  hiddenBtn.onclick = async () => {
-    if (mode !== 'focus') return;
-    trayOpen = !trayOpen;
-    if (trayOpen) await openHiddenTray();
-    else closeHiddenTray();
-  };
-  filtersControls.appendChild(hiddenBtn);
-  if (mode !== 'focus') hiddenBtn.hidden = true;
-
-  const hiddenTray = document.createElement('div');
-  hiddenTray.className = 'hidden-tray';
-  hiddenTray.hidden = true;
-  layoutShell.appendChild(hiddenTray);
-
   const contextConfirm = document.createElement('div');
   contextConfirm.className = 'context-confirm';
   contextConfirm.hidden = true;
@@ -280,122 +262,76 @@
     systemAckState.el.dataset.ackMode = mode;
   }
 
+  lensState = createLensStateController({
+    surface,
+    boundaryEl,
+    filtersControls,
+    mode,
+    syncCanvasViewportRect,
+    syncTouchState,
+  });
+
+  hiddenTrayState = createHiddenTrayController({
+    layoutShell,
+    systemStrip,
+    filtersControls,
+    surface,
+    mode,
+    currentContextId,
+    initialHiddenCount: window.__HIDDEN_COUNT__ || 0,
+    getMutationTransport,
+    getCanvasViewportRect,
+    setDragHalo,
+    createPin,
+    showCanvasWarning,
+    showResurfaceAck,
+    syncCanvasViewportRect,
+  });
+
+  dragDropState = createDragDropController({
+    surface,
+    mode,
+    dragThresholdPx: 5,
+    setDragHalo,
+    applyDistanceStyle,
+    savePin,
+  });
+
   function placeHiddenTray(){
-    const btnRect = hiddenBtn.getBoundingClientRect();
-    const stripRect = (systemStrip || layoutShell).getBoundingClientRect();
-    const trayW = 240;
-    const left = Math.max(8, Math.min(layoutShell.clientWidth - trayW - 8, (btnRect.right - stripRect.left) - trayW));
-    const top = Math.max(8, Math.min(layoutShell.clientHeight - 230, (btnRect.bottom - stripRect.top) + 8));
-    hiddenTray.style.left = left + 'px';
-    hiddenTray.style.top = top + 'px';
-  }
-
-  function readLensMode(){
-    try {
-      const stored = sessionStorage.getItem(LENS_MODE_STORAGE_KEY);
-      return stored === 'stale' ? 'stale' : 'all';
-    } catch (_err) {
-      return 'all';
-    }
-  }
-
-  function persistLensMode(){
-    try {
-      if (lens === 'stale') sessionStorage.setItem(LENS_MODE_STORAGE_KEY, 'stale');
-      else sessionStorage.removeItem(LENS_MODE_STORAGE_KEY);
-    } catch (_err) {}
-  }
-
-  function readStaleLensSnapshot(){
-    return [...surface.querySelectorAll('.pin[data-stale="true"]')]
-      .map((pin) => pin.dataset.id)
-      .filter((id) => typeof id === 'string' && id.length > 0);
+    hiddenTrayState.repositionIfOpen();
   }
 
   function captureStaleLensSnapshot(){
-    staleLensSnapshot = new Set(readStaleLensSnapshot());
+    lensState.captureStaleSnapshot();
   }
 
-  function restoreDetachedStalePins(){
-    if (!staleLensDetachedPins.size) return;
-    for (const [id, pin] of staleLensDetachedPins.entries()) {
-      if (pin.isConnected) continue;
-      pin.style.display = '';
-      surface.appendChild(pin);
-      staleLensDetachedPins.delete(id);
-    }
+  function renderLensButtons(){
+    lensState.renderButtons();
   }
 
-  function syncStaleLensDom(){
-    if (lens !== 'stale') {
-      restoreDetachedStalePins();
-      return;
-    }
-    surface.querySelectorAll('.pin').forEach((pin) => {
-      const id = pin.dataset.id;
-      const visible = staleLensSnapshot.has(id);
-      if (visible) {
-        pin.style.display = '';
-        return;
-      }
-      staleLensDetachedPins.set(id, pin);
-      pin.remove();
-    });
+  function isLensVisible(pin){
+    return lensState.isVisible(pin);
   }
 
-  function setLensMode(nextLens){
-    lens = nextLens;
-    if (lens === 'stale') {
-      captureStaleLensSnapshot();
-    } else {
-      lensExempt.clear();
-      staleLensSnapshot.clear();
-      restoreDetachedStalePins();
-    }
-    persistLensMode();
-    renderLensButtons();
-    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
-    applyLens();
-    syncCanvasViewportRect();
+  function applyLens(){
+    lensState.applyLens();
   }
 
-  const lensWrap = document.createElement('div');
-  lensWrap.className = 'lens-toggle';
+  function applyDistanceStyle(pin){
+    lensState.applyDistanceStyle(pin);
+  }
 
-  const sliderWrap = document.createElement('div');
-  sliderWrap.className = 'lens-slider-wrap';
-  sliderWrap.hidden = true;
-  sliderWrap.innerHTML = '<input class="lens-slider" type="range" min="35" max="85" value="68" step="1" aria-label="Lens sensitivity" />';
-  const lensSlider = sliderWrap.querySelector('.lens-slider');
-  lensSlider.addEventListener('input', () => {
-    lensRatio = Number(lensSlider.value) / 100;
-    updateBoundaryCue(true);
-    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
-    applyLens();
-  });
-  lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
-  lensSlider.addEventListener('pointerup', () => setTimeout(() => updateBoundaryCue(false), 380));
+  function setDragHalo(active){
+    lensState.setDragHalo(active);
+  }
 
-  ['all','center','periphery','stale'].forEach(name => {
-    const b = document.createElement('button');
-    b.className = 'lens-btn';
-    b.dataset.lens = name;
-    b.textContent = name[0].toUpperCase() + name.slice(1);
-    b.onclick = () => {
-      if (name === 'stale') {
-        setLensMode(lens === 'stale' ? 'all' : 'stale');
-        return;
-      }
-      setLensMode(name);
-    };
-    if (name === 'stale') lensWrap.appendChild(sliderWrap);
-    lensWrap.appendChild(b);
-  });
-  filtersControls.appendChild(lensWrap);
+  function closeHiddenTray(){
+    hiddenTrayState.close();
+  }
 
-  const center = () => ({x: surface.clientWidth/2, y: surface.clientHeight/2});
-  const maxR = () => Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
-  function proximityFactor(d){ const t = Math.min(1, d / maxR()); return 1 - t; }
+  function renderHiddenButton(){
+    hiddenTrayState.renderButton();
+  }
 
   function fitNoteHeight(noteEl){
     if (!noteEl) return;
@@ -570,197 +506,10 @@
     if (touchEl) touchEl.style.color = '#f5f8ff';
   }
 
-  function applyDistanceStyle(pin){
-    const w = pin.offsetWidth || 180, h = pin.offsetHeight || 72;
-    const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
-    const c = center();
-    const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
-    const cutoff = maxR() * lensRatio;
-    const isCenterBand = d <= cutoff;
-    const proximity = proximityFactor(d);
-
-    // Band-based sizing (semantic): Center = A, Periphery = B.
-    let cardScale = isCenterBand ? 1.05 : 0.95;
-    let titleSize = isCenterBand ? 14.7 : 12.3;
-    let bodySize = isCenterBand ? 11.7 : 10.7;
-    let titleWt = isCenterBand ? 660 : 560;
-
-    // Periphery lens readability lift: subtle floor for attended outer cards.
-    if (mode === 'focus' && lens === 'periphery' && !isCenterBand) {
-      cardScale = Math.max(cardScale, 0.98);
-      titleSize = Math.max(titleSize, 12.9);
-      bodySize = Math.max(bodySize, 11.1);
-      titleWt = Math.max(titleWt, 600);
-    }
-
-    pin.style.transform = `scale(${cardScale.toFixed(3)})`;
-    if (mode === 'focus') {
-      pin.dataset.band = isCenterBand ? 'center' : 'periphery';
-      const sat = isCenterBand ? (0.96 + proximity * 0.05) : (0.88 + proximity * 0.05);
-      const bright = isCenterBand ? (0.98 + proximity * 0.04) : (0.95 + proximity * 0.04);
-      const alpha = isCenterBand ? (0.97 + proximity * 0.03) : (0.88 + proximity * 0.06);
-      pin.style.setProperty('--pin-sat', sat.toFixed(3));
-      pin.style.setProperty('--pin-bright', bright.toFixed(3));
-      pin.style.setProperty('--pin-alpha', alpha.toFixed(3));
-    } else {
-      pin.dataset.band = 'neutral';
-      pin.style.removeProperty('--pin-sat');
-      pin.style.removeProperty('--pin-bright');
-      pin.style.removeProperty('--pin-alpha');
-    }
-    pin.dataset.inCenter = isCenterBand ? 'true' : 'false';
-    const title = pin.querySelector('.pin-title input');
-    const note = pin.querySelector('.pin-note textarea');
-    title.style.fontSize = `${titleSize.toFixed(2)}px`;
-    title.style.fontWeight = String(titleWt);
-    note.style.fontSize = `${bodySize.toFixed(2)}px`;
-    note.style.fontWeight = '480';
-    syncTouchState(pin);
-  }
-
   function refreshSwatches(){
     document.querySelectorAll('.sw').forEach(sw => {
       sw.classList.toggle('active', activePin && activePin.dataset.color === sw.dataset.color);
     });
-  }
-
-  function clearHiddenDragPreview(){
-    if (!hiddenDragPreview) return;
-    hiddenDragPreview.remove();
-    hiddenDragPreview = null;
-  }
-
-  function showHiddenDragPreview(title, ev){
-    clearHiddenDragPreview();
-    const preview = document.createElement('div');
-    preview.className = 'hidden-drag-preview';
-    preview.textContent = title || 'Untitled';
-    document.body.appendChild(preview);
-    hiddenDragPreview = preview;
-    if (ev.dataTransfer) ev.dataTransfer.setDragImage(preview, 16, 16);
-  }
-
-  function closeHiddenTray(){
-    clearHiddenDragPreview();
-    hiddenTray.hidden = true;
-    hiddenTray.innerHTML = '';
-    trayOpen = false;
-    renderHiddenButton();
-  }
-
-  function renderHiddenTrayItems(){
-    hiddenTray.innerHTML = '';
-    if (hiddenItemsCache.length === 0) {
-      hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
-      return;
-    }
-    hiddenItemsCache.forEach(it => {
-      const t = document.createElement('div');
-      t.className = 'hidden-tray-item';
-      t.dataset.id = it.id;
-      t.textContent = it.title || 'Untitled';
-      t.draggable = true;
-      t.addEventListener('dragstart', (ev) => {
-        showHiddenDragPreview(it.title || 'Untitled', ev);
-        ev.dataTransfer.setData('text/orbit-hidden-id', it.id);
-      });
-      t.addEventListener('dragend', () => {
-        clearHiddenDragPreview();
-      });
-      hiddenTray.appendChild(t);
-    });
-  }
-
-  function syncHiddenTray(){
-    if (!trayOpen) return;
-    renderHiddenTrayItems();
-  }
-
-  async function openHiddenTray(){
-    trayOpen = true;
-    hiddenTray.hidden = false;
-    placeHiddenTray();
-    hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.loadHiddenItems({contextId: currentContextId});
-      if (!result.ok) throw new Error(result.error || 'hidden load failed');
-      const data = result.data || {};
-      if (!trayOpen) return;
-      hiddenItemsCache = (data.items || []).filter(it => !pendingUnhide.has(it.id));
-      renderHiddenTrayItems();
-    } catch (e) {
-      if (!trayOpen) return;
-      hiddenTray.innerHTML = '<div class="hidden-tray-empty">Unable to load hidden cards</div>';
-    }
-  }
-
-  function renderHiddenButton(){
-    const btn = document.getElementById('hidden-toggle');
-    if (!btn) return;
-    btn.textContent = `Hidden (${hiddenCount})`;
-    const shouldHide = hiddenCount <= 0;
-    btn.hidden = shouldHide;
-    if (shouldHide && trayOpen) {
-      closeHiddenTray();
-      return;
-    }
-    if (trayOpen) placeHiddenTray();
-    syncCanvasViewportRect();
-  }
-
-  function renderLensButtons(){
-    document.querySelectorAll('.lens-btn').forEach(b => b.classList.toggle('active', b.dataset.lens === lens));
-    const sw = document.querySelector('.lens-slider-wrap');
-    if (sw) sw.hidden = (lens === 'all' || lens === 'stale');
-    updateBoundaryCue(false);
-  }
-
-  function inLens(pin){
-    if (lens === 'all') return true;
-    const w = pin.offsetWidth || 180, h = pin.offsetHeight || 72;
-    const x = parseFloat(pin.style.left) || 0, y = parseFloat(pin.style.top) || 0;
-    const c = center();
-    const d = Math.hypot((x+w/2)-c.x, (y+h/2)-c.y);
-    const cutoff = maxR() * lensRatio;
-    if (lens === 'center') return d <= cutoff;
-    return d > cutoff;
-  }
-
-  function isLensVisible(pin){
-    const id = pin.dataset.id;
-    if (lens === 'all') return true;
-    if (lens === 'stale') return staleLensSnapshot.has(id);
-    return lensExempt.has(id) || inLens(pin);
-  }
-
-  function applyLens(){
-    if (lens === 'stale') {
-      syncStaleLensDom();
-      return;
-    }
-    restoreDetachedStalePins();
-    surface.querySelectorAll('.pin').forEach(pin => {
-      const visible = isLensVisible(pin);
-      pin.style.display = visible ? '' : 'none';
-    });
-  }
-
-  function updateBoundaryCue(forceShow){
-    if (!boundaryEl) return;
-    const r = maxR() * lensRatio;
-    surface.style.setProperty('--center-radius', r + 'px');
-    boundaryEl.style.width = (r*2) + 'px';
-    boundaryEl.style.height = (r*2) + 'px';
-    const shouldShow = forceShow || dragHaloActive || (lens !== 'all' && lens !== 'stale');
-    boundaryEl.classList.toggle('show', shouldShow);
-  }
-
-  function setDragHalo(active){
-    if (dragHaloActive === active) return;
-    dragHaloActive = active;
-    surface.classList.toggle('focus-emphasis', active);
-    updateBoundaryCue(false);
   }
 
   function uid(){ return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
@@ -858,10 +607,8 @@
         return;
       }
       const d = result.data;
-      hiddenCount = (d && Number.isFinite(Number(d.hiddenCount))) ? Number(d.hiddenCount) : (hiddenCount + 1);
-      renderHiddenButton();
-      if (trayOpen) openHiddenTray();
-      lensExempt.delete(pin.dataset.id);
+      hiddenTrayState.handleHideSuccess(d);
+      lensState.forgetPin(pin.dataset.id);
       if (activePin === pin) setActivePin(null);
       pin.remove();
       return;
@@ -908,7 +655,7 @@
       return;
     }
 
-    lensExempt.delete(pin.dataset.id);
+    lensState.forgetPin(pin.dataset.id);
     if (activePin === pin) setActivePin(null);
     pin.remove();
     if (mode === 'contexts') {
@@ -1220,76 +967,7 @@
       });
     }
 
-    pin.addEventListener('pointerdown', (e) => {
-      if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
-      setActivePin(pin);
-      const rect = pin.getBoundingClientRect();
-      const surfRect = surface.getBoundingClientRect();
-      const offsetX = e.clientX - rect.left;
-      const offsetY = e.clientY - rect.top;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      let dragging = false;
-      const pointerId = e.pointerId;
-      let pointerCaptured = false;
-      let ended = false;
-
-      const cleanup = () => {
-        if (ended) return;
-        ended = true;
-        pin.removeEventListener('pointermove', onMove);
-        pin.removeEventListener('pointerup', onUp);
-        pin.removeEventListener('pointercancel', onUp);
-        window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onUp);
-        window.removeEventListener('lostpointercapture', onUp);
-      };
-
-      const onMove = (ev) => {
-        const dist = Math.hypot(ev.clientX - startX, ev.clientY - startY);
-        if (!dragging && dist < DRAG_THRESHOLD_PX) return;
-        if (!dragging) {
-          dragging = true;
-          pin.classList.add('dragging');
-          try {
-            pin.setPointerCapture(pointerId);
-            pointerCaptured = true;
-          } catch (_err) {}
-          if (mode === 'focus') setDragHalo(true);
-          if (document.activeElement && pin.contains(document.activeElement)) document.activeElement.blur();
-        }
-        const w = pin.offsetWidth || rect.width;
-        const h = pin.offsetHeight || rect.height;
-        const x = ev.clientX - surfRect.left - offsetX;
-        const y = ev.clientY - surfRect.top - offsetY;
-        pin.style.left = Math.max(6, Math.min(surface.clientWidth - w - 6, x)) + 'px';
-        pin.style.top = Math.max(6, Math.min(surface.clientHeight - h - 6, y)) + 'px';
-        applyDistanceStyle(pin);
-        pin.style.display = ''; // active card exempt while manipulating
-      };
-
-      const onUp = (ev) => {
-        cleanup();
-        if (dragging) {
-          pin.classList.remove('dragging');
-          if (pointerCaptured && pin.hasPointerCapture(ev.pointerId)) {
-            try {
-              pin.releasePointerCapture(ev.pointerId);
-            } catch (_err) {}
-          }
-          if (mode === 'focus') setDragHalo(false);
-          applyDistanceStyle(pin);
-          savePin(pin); // no snap/reassign/normalize
-        }
-      };
-
-      pin.addEventListener('pointermove', onMove);
-      pin.addEventListener('pointerup', onUp);
-      pin.addEventListener('pointercancel', onUp);
-      window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onUp);
-      window.addEventListener('lostpointercapture', onUp);
-    });
+    dragDropState.bindPinDrag(pin, setActivePin);
 
     pin.querySelectorAll('input, textarea').forEach(input => {
       input.addEventListener('input', () => {
@@ -1355,8 +1033,7 @@
     pin.dataset.active = item.active ? 'true' : 'false';
     pin.dataset.stale = item.stale ? 'true' : 'false';
     pin.dataset.inCenter = item.inCenter ? 'true' : 'false';
-    if (markSaved) lensExempt.delete(item.id);
-    else lensExempt.add(item.id);
+    lensState.registerPin(item.id, markSaved);
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
     pin.style.top = `${item.y}px`;
@@ -1373,7 +1050,7 @@
     setSlipping(pin, !!item.slipping);
     applyDistanceStyle(pin);
     bindPin(pin);
-    pin.style.display = (lens === 'stale' ? isLensVisible(pin) : (!markSaved || isLensVisible(pin))) ? '' : 'none';
+    pin.style.display = lensState.initialDisplayValue(pin, markSaved);
     const ta = pin.querySelector('.pin-note textarea'); fitNoteHeight(ta);
     setActivePin(pin);
     if (focusTitle) {
@@ -1387,85 +1064,12 @@
   items.forEach((item) => createPin(item, false, true));
 
 
-  surface.addEventListener('dragover', (e) => {
-    if (!trayOpen) return;
-    if (e.dataTransfer && e.dataTransfer.types.includes('text/orbit-hidden-id')) {
-      e.preventDefault();
-      if (mode === 'focus') setDragHalo(true);
-    }
-  });
-
-  surface.addEventListener('dragleave', (e) => {
-    if (!trayOpen || mode !== 'focus') return;
-    const next = e.relatedTarget;
-    if (!next || !surface.contains(next)) setDragHalo(false);
-  });
-
-  surface.addEventListener('drop', async (e) => {
-    if (!trayOpen || mode !== 'focus') return;
-    const id = e.dataTransfer && e.dataTransfer.getData('text/orbit-hidden-id');
-    if (!id) return;
-    e.preventDefault();
-    clearHiddenDragPreview();
-    setDragHalo(false);
-    const rect = getCanvasViewportRect();
-    const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
-    const y = Math.max(6, Math.min(rect.height - 90, e.clientY - rect.top));
-    if (pendingUnhide.has(id)) return;
-    const itemIndex = hiddenItemsCache.findIndex(i => i.id === id);
-    if (itemIndex < 0) return;
-    const item = hiddenItemsCache[itemIndex];
-    pendingUnhide.set(id, {item, index: itemIndex, x, y});
-    hiddenItemsCache = hiddenItemsCache.filter(i => i.id !== id);
-    hiddenCount = Math.max(0, hiddenCount - 1);
-    renderHiddenButton();
-    syncHiddenTray();
-    const persist = async () => {
-      try {
-        const transport = await getMutationTransport();
-        const result = await transport.unhideItemAt({id, contextId: currentContextId, x, y});
-        if (!result.ok) {
-          transport.logMutationFailure({
-            operation: 'unhide-at',
-            id,
-            contextId: currentContextId,
-            endpoint: result.endpoint,
-            status: result.status,
-            error: result.error,
-          });
-          throw new Error(result.error || 'unhide failed');
-        }
-        const data = result.data;
-        const pending = pendingUnhide.get(id);
-        if (!pending) return;
-        pendingUnhide.delete(id);
-        const restoredItem = data && data.item ? {...pending.item, ...data.item, x, y} : {...pending.item, x, y};
-        if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
-        showResurfaceAck();
-      } catch (_err) {
-        const pending = pendingUnhide.get(id);
-        if (!pending) return;
-        pendingUnhide.delete(id);
-        if (!hiddenItemsCache.find(i => i.id === id)) {
-          if (Number.isInteger(pending.index) && pending.index >= 0 && pending.index <= hiddenItemsCache.length) {
-            hiddenItemsCache.splice(pending.index, 0, pending.item);
-          } else {
-            hiddenItemsCache.push(pending.item);
-          }
-          hiddenCount += 1;
-          renderHiddenButton();
-          syncHiddenTray();
-        }
-        showCanvasWarning('Couldn\u2019t unhide item. Please try again.');
-      }
-    };
-    persist();
-  });
+  dragDropState.bindSurfaceInteractions(hiddenTrayState);
 
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     if (ev.defaultPrevented) return;
-    if (!trayOpen) return;
+    if (!hiddenTrayState.isOpen()) return;
     closeHiddenTray();
   });
 
@@ -1485,7 +1089,7 @@
   surface.addEventListener('pointerdown', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    const outsideTrayClick = trayOpen && !target.closest('.hidden-tray') && !target.closest('#hidden-toggle');
+    const outsideTrayClick = hiddenTrayState.isOpen() && !target.closest('.hidden-tray') && !target.closest('#hidden-toggle');
     if (outsideTrayClick) closeHiddenTray();
     if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm')) return;
     if (outsideTrayClick) return;
@@ -1498,7 +1102,7 @@
 
   if (surface.querySelector('.pin')) setActivePin(surface.querySelector('.pin'));
   renderHiddenButton();
-  if (lens === 'stale') captureStaleLensSnapshot();
+  if (lensState.getMode() === 'stale') captureStaleLensSnapshot();
   renderLensButtons();
   syncCanvasViewportRect();
   applyLens();
@@ -1507,8 +1111,10 @@
     syncCanvasViewportRect();
     surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
     applyLens();
-    updateBoundaryCue(false);
+    lensState.updateBoundaryCue(false);
     if (systemAckState) refreshSystemAckMode(systemAckState.el);
-    if (trayOpen) placeHiddenTray();
+    placeHiddenTray();
   });
-})();
+})().catch((err) => {
+  console.error(err);
+});
