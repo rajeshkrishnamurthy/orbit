@@ -1,6 +1,7 @@
 package orbit
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -25,7 +26,7 @@ func (s *Store) importJSON(path string) error {
 		if it.UpdatedAt.IsZero() {
 			it.UpdatedAt = time.Now()
 		}
-		if err := s.update(it); err != nil {
+		if err := s.updateWithContext(context.Background(), it); err != nil {
 			return err
 		}
 	}
@@ -34,7 +35,7 @@ func (s *Store) importJSON(path string) error {
 
 func (s *Store) seedDefaults() error {
 	for _, it := range seedItems() {
-		if err := s.update(it); err != nil {
+		if err := s.updateWithContext(context.Background(), it); err != nil {
 			return err
 		}
 	}
@@ -42,16 +43,20 @@ func (s *Store) seedDefaults() error {
 }
 
 func (s *Store) update(item Item) error {
+	return s.updateWithContext(context.Background(), item)
+}
+
+func (s *Store) updateWithContext(ctx context.Context, item Item) error {
 	now := time.Now()
 	if item.UpdatedAt.IsZero() {
 		item.UpdatedAt = now
 	}
 	createdAt := now.Format(time.RFC3339Nano)
-	scanErr := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
+	scanErr := s.queryRowContext(ctx, `SELECT created_at FROM items WHERE id = ?`, item.ID).Scan(&createdAt)
 	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("load item created_at %q: %w", item.ID, scanErr)
 	}
-	_, err := s.db.Exec(`
+	_, err := s.execContext(ctx, `
 INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
@@ -71,7 +76,11 @@ ON CONFLICT(id) DO UPDATE SET
 }
 
 func (s *Store) delete(id string) error {
-	result, err := s.db.Exec(`DELETE FROM items WHERE id = ?`, id)
+	return s.deleteWithContext(context.Background(), id)
+}
+
+func (s *Store) deleteWithContext(ctx context.Context, id string) error {
+	result, err := s.execContext(ctx, `DELETE FROM items WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete item %q: %w", id, err)
 	}
@@ -82,7 +91,11 @@ func (s *Store) delete(id string) error {
 }
 
 func (s *Store) setCompleted(id string, completed bool) error {
-	result, err := s.db.Exec(`UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
+	return s.setCompletedWithContext(context.Background(), id, completed)
+}
+
+func (s *Store) setCompletedWithContext(ctx context.Context, id string, completed bool) error {
+	result, err := s.execContext(ctx, `UPDATE items SET completed=?, updated_at=? WHERE id=?`, boolToInt(completed), time.Now().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return fmt.Errorf("set item %q completed=%t: %w", id, completed, err)
 	}
@@ -91,8 +104,13 @@ func (s *Store) setCompleted(id string, completed bool) error {
 	}
 	return nil
 }
+
 func (s *Store) hide(id, contextID string) error {
-	result, err := s.db.Exec(`UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
+	return s.hideWithContext(context.Background(), id, contextID)
+}
+
+func (s *Store) hideWithContext(ctx context.Context, id, contextID string) error {
+	result, err := s.execContext(ctx, `UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	if err != nil {
 		return fmt.Errorf("hide item %q in context %q: %w", id, contextOrDefault(contextID), err)
 	}
@@ -102,9 +120,9 @@ func (s *Store) hide(id, contextID string) error {
 	return nil
 }
 
-func (s *Store) hiddenCount(contextID string) (int, error) {
+func (s *Store) hiddenCountWithContext(ctx context.Context, contextID string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, contextOrDefault(contextID)).Scan(&n)
+	err := s.queryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE hidden=1 AND context_id=?`, contextOrDefault(contextID)).Scan(&n)
 	if err != nil {
 		return n, fmt.Errorf("count hidden items in context %q: %w", contextOrDefault(contextID), err)
 	}
@@ -112,7 +130,11 @@ func (s *Store) hiddenCount(contextID string) (int, error) {
 }
 
 func (s *Store) hiddenItems(contextID string) ([]Item, error) {
-	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	return s.hiddenItemsWithContext(context.Background(), contextID)
+}
+
+func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([]Item, error) {
+	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query hidden items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -143,7 +165,7 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	for i := range out {
 		ids = append(ids, out[i].ID)
 	}
-	summaries, summaryErr := s.touchSummaries(ids)
+	summaries, summaryErr := s.touchSummariesWithContext(ctx, ids)
 	if summaryErr != nil {
 		return nil, summaryErr
 	}
@@ -155,7 +177,11 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 }
 
 func (s *Store) unhideAt(id, contextID string, x, y float64) error {
-	result, err := s.db.Exec(`UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
+	return s.unhideAtWithContext(context.Background(), id, contextID, x, y)
+}
+
+func (s *Store) unhideAtWithContext(ctx context.Context, id, contextID string, x, y float64) error {
+	result, err := s.execContext(ctx, `UPDATE items SET hidden=0, x=?, y=?, updated_at=? WHERE id=? AND context_id=?`, x, y, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
 	if err != nil {
 		return fmt.Errorf("unhide item %q in context %q: %w", id, contextOrDefault(contextID), err)
 	}
@@ -166,7 +192,11 @@ func (s *Store) unhideAt(id, contextID string, x, y float64) error {
 }
 
 func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
-	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	return s.revealAllHiddenWithContext(context.Background(), contextID)
+}
+
+func (s *Store) revealAllHiddenWithContext(ctx context.Context, contextID string) ([]Item, error) {
+	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query hidden items to reveal for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -199,7 +229,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 	for i := range out {
 		ids = append(ids, out[i].ID)
 	}
-	summaries, summaryErr := s.touchSummaries(ids)
+	summaries, summaryErr := s.touchSummariesWithContext(ctx, ids)
 	if summaryErr != nil {
 		return nil, summaryErr
 	}
@@ -207,14 +237,18 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 		deriveTouchState(&out[i], createdByID[out[i].ID], summaries[out[i].ID])
 	}
 	now := time.Now().Format(time.RFC3339Nano)
-	if _, updateErr := s.db.Exec(`UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); updateErr != nil {
+	if _, updateErr := s.execContext(ctx, `UPDATE items SET hidden=0, updated_at=? WHERE hidden=1 AND context_id=?`, now, contextOrDefault(contextID)); updateErr != nil {
 		return nil, fmt.Errorf("mark all hidden items revealed in context %q: %w", contextOrDefault(contextID), updateErr)
 	}
 	return out, nil
 }
 
 func (s *Store) snapshot(contextID string) ([]Item, error) {
-	rows, queryErr := s.db.Query(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	return s.snapshotWithContext(context.Background(), contextID)
+}
+
+func (s *Store) snapshotWithContext(ctx context.Context, contextID string) ([]Item, error) {
+	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query visible items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -246,7 +280,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	for i := range out {
 		ids = append(ids, out[i].ID)
 	}
-	summaries, summaryErr := s.touchSummaries(ids)
+	summaries, summaryErr := s.touchSummariesWithContext(ctx, ids)
 	if summaryErr != nil {
 		return nil, summaryErr
 	}
@@ -256,10 +290,10 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 	return out, nil
 }
 
-func (s *Store) touchItemState(id string) (*Item, error) {
+func (s *Store) touchItemStateWithContext(ctx context.Context, id string) (*Item, error) {
 	var it Item
 	var updated string
-	err := s.db.QueryRow(`SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated)
+	err := s.queryRowContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated)
 	if err != nil {
 		return nil, fmt.Errorf("load item %q state: %w", id, err)
 	}
@@ -267,13 +301,18 @@ func (s *Store) touchItemState(id string) (*Item, error) {
 		it.UpdatedAt = t
 	}
 	it.InCenter = classifyDesktopBand(it.X, it.Y)
-	if err := s.applyTouchState(&it); err != nil {
+	if err := s.applyTouchStateWithContext(ctx, &it); err != nil {
 		return nil, err
 	}
 	return &it, nil
 }
+
 func (s *Store) contexts() ([]Context, error) {
-	rows, err := s.db.Query(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts ORDER BY updated_at DESC`)
+	return s.contextsWithContext(context.Background())
+}
+
+func (s *Store) contextsWithContext(ctx context.Context) ([]Context, error) {
+	rows, err := s.queryContext(ctx, `SELECT id,title,sub_note,x,y,color,updated_at FROM contexts ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query contexts: %w", err)
 	}
@@ -297,10 +336,14 @@ func (s *Store) contexts() ([]Context, error) {
 }
 
 func (s *Store) contextByID(id string) (*Context, error) {
+	return s.contextByIDWithContext(context.Background(), id)
+}
+
+func (s *Store) contextByIDWithContext(ctx context.Context, id string) (*Context, error) {
 	id = contextOrDefault(id)
 	var c Context
 	var updated string
-	err := s.db.QueryRow(`SELECT id,title,sub_note,x,y,color,updated_at FROM contexts WHERE id=?`, id).Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated)
+	err := s.queryRowContext(ctx, `SELECT id,title,sub_note,x,y,color,updated_at FROM contexts WHERE id=?`, id).Scan(&c.ID, &c.Title, &c.SubNote, &c.X, &c.Y, &c.Color, &updated)
 	if err != nil {
 		return nil, fmt.Errorf("load context %q: %w", id, err)
 	}
@@ -311,24 +354,28 @@ func (s *Store) contextByID(id string) (*Context, error) {
 }
 
 func (s *Store) upsertContext(c Context) error {
+	return s.upsertContextWithContext(context.Background(), c)
+}
+
+func (s *Store) upsertContextWithContext(ctx context.Context, c Context) error {
 	now := time.Now().Format(time.RFC3339Nano)
 	created := now
-	scanErr := s.db.QueryRow(`SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
+	scanErr := s.queryRowContext(ctx, `SELECT created_at FROM contexts WHERE id=?`, c.ID).Scan(&created)
 	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("load context %q created_at: %w", c.ID, scanErr)
 	}
-	_, err := s.db.Exec(`INSERT INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,sub_note=excluded.sub_note,x=excluded.x,y=excluded.y,color=excluded.color,updated_at=excluded.updated_at`, c.ID, c.Title, c.SubNote, c.X, c.Y, c.Color, created, now)
+	_, err := s.execContext(ctx, `INSERT INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,sub_note=excluded.sub_note,x=excluded.x,y=excluded.y,color=excluded.color,updated_at=excluded.updated_at`, c.ID, c.Title, c.SubNote, c.X, c.Y, c.Color, created, now)
 	if err != nil {
 		return fmt.Errorf("upsert context %q: %w", c.ID, err)
 	}
 	return nil
 }
 
-func (s *Store) deleteContext(id string) error {
+func (s *Store) deleteContextWithContext(ctx context.Context, id string) error {
 	if id == "main-orbit" {
 		return errors.New("cannot delete Main Orbit")
 	}
-	result, err := s.db.Exec(`DELETE FROM contexts WHERE id=?`, id)
+	result, err := s.execContext(ctx, `DELETE FROM contexts WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("delete context %q: %w", id, err)
 	}

@@ -1,6 +1,7 @@
 package orbit
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -65,11 +66,17 @@ type App struct {
 	service *AppService
 }
 
+const requestTimeout = 5 * time.Second
+
 func (a *App) appService() *AppService {
 	if a.service == nil {
 		a.service = newAppService(a.store)
 	}
 	return a.service
+}
+
+func (a *App) requestContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(r.Context(), requestTimeout)
 }
 
 func seedItems() []Item {
@@ -160,6 +167,14 @@ type apiErrorPolicy struct {
 }
 
 func writeAPIError(w http.ResponseWriter, err error, p apiErrorPolicy) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		http.Error(w, "request timed out", http.StatusRequestTimeout)
+		return
+	}
+	if errors.Is(err, context.Canceled) {
+		http.Error(w, "request canceled", http.StatusRequestTimeout)
+		return
+	}
 	if p.notFoundErr != nil && errors.Is(err, p.notFoundErr) {
 		http.Error(w, p.notFoundMessage, http.StatusNotFound)
 		return
@@ -176,13 +191,15 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	resp, err := a.appService().Home(HomeRequest{
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	resp, err := a.appService().Home(reqCtx, HomeRequest{
 		Canvas:     r.URL.Query().Get("canvas"),
 		ContextID:  r.URL.Query().Get("ctx"),
 		MobileMode: isMobileRequest(r),
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
 	var itemsJSON template.JS
@@ -218,6 +235,8 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var item Item
 	if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
@@ -227,7 +246,7 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	resp, err := a.appService().UpsertItem(UpsertItemRequest{Item: item})
+	resp, err := a.appService().UpsertItem(reqCtx, UpsertItemRequest{Item: item})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
@@ -253,6 +272,8 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID string `json:"id"`
 	}
@@ -264,7 +285,7 @@ func (a *App) deleteItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.appService().DeleteItem(DeleteItemRequest{ID: in.ID}); err != nil {
+	if err := a.appService().DeleteItem(reqCtx, DeleteItemRequest{ID: in.ID}); err != nil {
 		writeAPIError(w, err, apiErrorPolicy{
 			notFoundErr:     errWriteTargetNotFound,
 			notFoundMessage: "item not found",
@@ -283,6 +304,8 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID        string `json:"id"`
 		Completed *bool  `json:"completed"`
@@ -295,7 +318,7 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.appService().SetItemCompleted(CompleteItemRequest{
+	if err := a.appService().SetItemCompleted(reqCtx, CompleteItemRequest{
 		ID:        in.ID,
 		Completed: in.Completed,
 	}); err != nil {
@@ -330,6 +353,8 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID string `json:"id"`
 	}
@@ -341,7 +366,7 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	resp, err := a.appService().TouchItem(TouchItemRequest{ID: in.ID})
+	resp, err := a.appService().TouchItem(reqCtx, TouchItemRequest{ID: in.ID})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{
 			notFoundErr:     sql.ErrNoRows,
@@ -372,6 +397,8 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID string `json:"id"`
 	}
@@ -383,7 +410,7 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	resp, err := a.appService().UndoTouchItem(UndoTouchItemRequest{ID: in.ID})
+	resp, err := a.appService().UndoTouchItem(reqCtx, UndoTouchItemRequest{ID: in.ID})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{
 			notFoundErr:     sql.ErrNoRows,
@@ -414,6 +441,8 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID        string `json:"id"`
 		ContextID string `json:"contextId"`
@@ -426,7 +455,7 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	resp, err := a.appService().HideItem(HideItemRequest{
+	resp, err := a.appService().HideItem(reqCtx, HideItemRequest{
 		ID:        in.ID,
 		ContextID: in.ContextID,
 	})
@@ -449,13 +478,15 @@ func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("decode revealAllAPI request: %v", err)
 	}
-	resp, err := a.appService().RevealAllHidden(RevealAllHiddenRequest{ContextID: in.ContextID})
+	resp, err := a.appService().RevealAllHidden(reqCtx, RevealAllHiddenRequest{ContextID: in.ContextID})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
@@ -476,13 +507,15 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ContextID string `json:"contextId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		log.Printf("decode hiddenItemsAPI request: %v", err)
 	}
-	resp, err := a.appService().HiddenItems(HiddenItemsRequest{ContextID: in.ContextID})
+	resp, err := a.appService().HiddenItems(reqCtx, HiddenItemsRequest{ContextID: in.ContextID})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
@@ -503,6 +536,8 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	var in struct {
 		ID        string  `json:"id"`
 		ContextID string  `json:"contextId"`
@@ -517,7 +552,7 @@ func (a *App) unhideAtAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	resp, err := a.appService().UnhideAt(UnhideAtRequest{
+	resp, err := a.appService().UnhideAt(reqCtx, UnhideAtRequest{
 		ID:        in.ID,
 		ContextID: in.ContextID,
 		X:         in.X,
@@ -564,13 +599,15 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
 	in, err := decodeContextUpsertInput(r)
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
 
-	resp, err := a.appService().UpsertContext(ContextUpsertRequest{
+	resp, err := a.appService().UpsertContext(reqCtx, ContextUpsertRequest{
 		ID:      in.ID,
 		Title:   in.Title,
 		SubNote: in.SubNote,
@@ -610,7 +647,9 @@ func (a *App) deleteContextAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
-	if err := a.appService().DeleteContext(DeleteContextRequest{ID: id}); err != nil {
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	if err := a.appService().DeleteContext(reqCtx, DeleteContextRequest{ID: id}); err != nil {
 		writeAPIError(w, err, apiErrorPolicy{
 			notFoundErr:     errWriteTargetNotFound,
 			notFoundMessage: "context not found",

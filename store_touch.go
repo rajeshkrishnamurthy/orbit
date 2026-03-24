@@ -1,6 +1,7 @@
 package orbit
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func parseCreatedLocalDay(id, createdAt string) (string, error) {
 	return localDayString(created), nil
 }
 
-func (s *Store) touchSummaries(ids []string) (map[string]touchSummary, error) {
+func (s *Store) touchSummariesWithContext(ctx context.Context, ids []string) (map[string]touchSummary, error) {
 	summaries := make(map[string]touchSummary, len(ids))
 	if len(ids) == 0 {
 		return summaries, nil
@@ -68,7 +69,7 @@ GROUP BY card_id
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query touch summaries: %w", err)
 	}
@@ -98,9 +99,9 @@ GROUP BY card_id
 	return summaries, nil
 }
 
-func (s *Store) createdLocalDay(id string) (string, error) {
+func (s *Store) createdLocalDayWithContext(ctx context.Context, id string) (string, error) {
 	var createdAt string
-	if err := s.db.QueryRow(`SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
+	if err := s.queryRowContext(ctx, `SELECT created_at FROM items WHERE id = ?`, id).Scan(&createdAt); err != nil {
 		return "", fmt.Errorf("load item %q created_at: %w", id, err)
 	}
 	return parseCreatedLocalDay(id, createdAt)
@@ -122,7 +123,11 @@ func withinLocalDays(day string, days int) bool {
 }
 
 func (s *Store) touchSummary(id string) (touchSummary, error) {
-	rows, err := s.db.Query(`SELECT local_day FROM touch_facts WHERE card_id=? ORDER BY local_day DESC`, id)
+	return s.touchSummaryWithContext(context.Background(), id)
+}
+
+func (s *Store) touchSummaryWithContext(ctx context.Context, id string) (touchSummary, error) {
+	rows, err := s.queryContext(ctx, `SELECT local_day FROM touch_facts WHERE card_id=? ORDER BY local_day DESC`, id)
 	if err != nil {
 		return touchSummary{}, fmt.Errorf("query touch facts for %q: %w", id, err)
 	}
@@ -151,23 +156,24 @@ func (s *Store) touchSummary(id string) (touchSummary, error) {
 	return out, nil
 }
 
-func (s *Store) applyTouchState(it *Item) error {
-	summary, err := s.touchSummary(it.ID)
+func (s *Store) applyTouchStateWithContext(ctx context.Context, it *Item) error {
+	summary, err := s.touchSummaryWithContext(ctx, it.ID)
 	if err != nil {
 		return err
 	}
-	createdDay, err := s.createdLocalDay(it.ID)
+	createdDay, err := s.createdLocalDayWithContext(ctx, it.ID)
 	if err != nil {
 		return err
 	}
 	deriveTouchState(it, createdDay, summary)
 	return nil
 }
-func (s *Store) touchCard(id string) (*Item, bool, error) {
+
+func (s *Store) touchCardWithContext(ctx context.Context, id string) (*Item, bool, error) {
 	now := time.Now().In(time.Local)
 	localDay := now.Format("2006-01-02")
 	createdAt := now.Format(time.RFC3339Nano)
-	tx, err := s.db.Begin()
+	tx, err := s.beginTxContext(ctx, nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("begin touch tx for item %q: %w", id, err)
 	}
@@ -182,7 +188,7 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 	}()
 
 	var existing int
-	err = tx.QueryRow(`SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing)
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&existing)
 	if err != nil {
 		return nil, false, fmt.Errorf("count touch facts for item %q on %s: %w", id, localDay, err)
 	}
@@ -192,13 +198,13 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 			return nil, false, fmt.Errorf("commit no-op touch tx for item %q: %w", id, err)
 		}
 		committed = true
-		item, stateErr := s.touchItemState(id)
+		item, stateErr := s.touchItemStateWithContext(ctx, id)
 		if stateErr != nil {
 			return nil, false, stateErr
 		}
 		return item, false, nil
 	}
-	_, err = tx.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, id, localDay, createdAt)
 	if err != nil {
 		return nil, false, fmt.Errorf("insert touch fact for item %q on %s: %w", id, localDay, err)
 	}
@@ -207,21 +213,21 @@ func (s *Store) touchCard(id string) (*Item, bool, error) {
 		return nil, false, fmt.Errorf("commit touch tx for item %q: %w", id, err)
 	}
 	committed = true
-	item, err := s.touchItemState(id)
+	item, err := s.touchItemStateWithContext(ctx, id)
 	if err != nil {
 		return nil, false, err
 	}
 	return item, true, nil
 }
 
-func (s *Store) undoTouchCard(id string) (*Item, bool, error) {
+func (s *Store) undoTouchCardWithContext(ctx context.Context, id string) (*Item, bool, error) {
 	now := time.Now().In(time.Local)
 	localDay := now.Format("2006-01-02")
 	var createdAt string
-	err := s.db.QueryRow(`SELECT created_at FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&createdAt)
+	err := s.queryRowContext(ctx, `SELECT created_at FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay).Scan(&createdAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			item, stateErr := s.touchItemState(id)
+			item, stateErr := s.touchItemStateWithContext(ctx, id)
 			return item, false, stateErr
 		}
 		return nil, false, fmt.Errorf("load touch fact for item %q on %s: %w", id, localDay, err)
@@ -231,14 +237,14 @@ func (s *Store) undoTouchCard(id string) (*Item, bool, error) {
 		return nil, false, fmt.Errorf("parse touch fact timestamp for item %q: %w", id, err)
 	}
 	if now.Sub(created) > 6*time.Second {
-		item, stateErr := s.touchItemState(id)
+		item, stateErr := s.touchItemStateWithContext(ctx, id)
 		return item, false, stateErr
 	}
-	_, err = s.db.Exec(`DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay)
+	_, err = s.execContext(ctx, `DELETE FROM touch_facts WHERE card_id=? AND local_day=?`, id, localDay)
 	if err != nil {
 		return nil, false, fmt.Errorf("delete touch fact for item %q on %s: %w", id, localDay, err)
 	}
-	item, err := s.touchItemState(id)
+	item, err := s.touchItemStateWithContext(ctx, id)
 	if err != nil {
 		return nil, false, err
 	}

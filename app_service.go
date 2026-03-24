@@ -1,6 +1,7 @@
 package orbit
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -32,9 +33,9 @@ type HomeResponse struct {
 	MobileMode          bool
 }
 
-func (s *AppService) Home(req HomeRequest) (HomeResponse, error) {
+func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, error) {
 	if req.Canvas == "contexts" {
-		contexts, err := s.store.contexts()
+		contexts, err := s.store.contextsWithContext(ctx)
 		if err != nil {
 			return HomeResponse{}, err
 		}
@@ -49,15 +50,15 @@ func (s *AppService) Home(req HomeRequest) (HomeResponse, error) {
 	}
 
 	ctxID := contextOrDefault(req.ContextID)
-	cur, err := s.store.contextByID(ctxID)
+	cur, err := s.store.contextByIDWithContext(ctx, ctxID)
 	if err != nil {
 		return HomeResponse{}, err
 	}
-	items, err := s.store.snapshot(ctxID)
+	items, err := s.store.snapshotWithContext(ctx, ctxID)
 	if err != nil {
 		return HomeResponse{}, err
 	}
-	hiddenN, err := s.store.hiddenCount(ctxID)
+	hiddenN, err := s.store.hiddenCountWithContext(ctx, ctxID)
 	if err != nil {
 		return HomeResponse{}, err
 	}
@@ -79,11 +80,11 @@ type UpsertItemResponse struct {
 	State Item
 }
 
-func (s *AppService) UpsertItem(req UpsertItemRequest) (UpsertItemResponse, error) {
-	if err := s.store.update(req.Item); err != nil {
+func (s *AppService) UpsertItem(ctx context.Context, req UpsertItemRequest) (UpsertItemResponse, error) {
+	if err := s.store.updateWithContext(ctx, req.Item); err != nil {
 		return UpsertItemResponse{}, err
 	}
-	state, err := s.store.touchItemState(req.Item.ID)
+	state, err := s.store.touchItemStateWithContext(ctx, req.Item.ID)
 	if err != nil {
 		return UpsertItemResponse{}, err
 	}
@@ -94,8 +95,8 @@ type DeleteItemRequest struct {
 	ID string
 }
 
-func (s *AppService) DeleteItem(req DeleteItemRequest) error {
-	return s.store.delete(req.ID)
+func (s *AppService) DeleteItem(ctx context.Context, req DeleteItemRequest) error {
+	return s.store.deleteWithContext(ctx, req.ID)
 }
 
 type CompleteItemRequest struct {
@@ -103,12 +104,12 @@ type CompleteItemRequest struct {
 	Completed *bool
 }
 
-func (s *AppService) SetItemCompleted(req CompleteItemRequest) error {
+func (s *AppService) SetItemCompleted(ctx context.Context, req CompleteItemRequest) error {
 	completed := true
 	if req.Completed != nil {
 		completed = *req.Completed
 	}
-	return s.store.setCompleted(req.ID, completed)
+	return s.store.setCompletedWithContext(ctx, req.ID, completed)
 }
 
 type TouchItemRequest struct {
@@ -120,8 +121,8 @@ type TouchItemResponse struct {
 	Touched bool
 }
 
-func (s *AppService) TouchItem(req TouchItemRequest) (TouchItemResponse, error) {
-	item, touched, err := s.store.touchCard(req.ID)
+func (s *AppService) TouchItem(ctx context.Context, req TouchItemRequest) (TouchItemResponse, error) {
+	item, touched, err := s.store.touchCardWithContext(ctx, req.ID)
 	if err != nil {
 		return TouchItemResponse{}, err
 	}
@@ -137,8 +138,8 @@ type UndoTouchItemResponse struct {
 	Undone bool
 }
 
-func (s *AppService) UndoTouchItem(req UndoTouchItemRequest) (UndoTouchItemResponse, error) {
-	item, undone, err := s.store.undoTouchCard(req.ID)
+func (s *AppService) UndoTouchItem(ctx context.Context, req UndoTouchItemRequest) (UndoTouchItemResponse, error) {
+	item, undone, err := s.store.undoTouchCardWithContext(ctx, req.ID)
 	if err != nil {
 		return UndoTouchItemResponse{}, err
 	}
@@ -154,12 +155,12 @@ type HideItemResponse struct {
 	HiddenCount int
 }
 
-func (s *AppService) HideItem(req HideItemRequest) (HideItemResponse, error) {
-	if err := s.store.hide(req.ID, req.ContextID); err != nil {
+func (s *AppService) HideItem(ctx context.Context, req HideItemRequest) (HideItemResponse, error) {
+	if err := s.store.hideWithContext(ctx, req.ID, req.ContextID); err != nil {
 		return HideItemResponse{}, err
 	}
 	hiddenN := 0
-	count, countErr := s.store.hiddenCount(req.ContextID)
+	count, countErr := s.store.hiddenCountWithContext(ctx, req.ContextID)
 	if countErr == nil {
 		hiddenN = count
 	}
@@ -175,8 +176,8 @@ type RevealAllHiddenResponse struct {
 	HiddenCount int
 }
 
-func (s *AppService) RevealAllHidden(req RevealAllHiddenRequest) (RevealAllHiddenResponse, error) {
-	items, err := s.store.revealAllHidden(req.ContextID)
+func (s *AppService) RevealAllHidden(ctx context.Context, req RevealAllHiddenRequest) (RevealAllHiddenResponse, error) {
+	items, err := s.store.revealAllHiddenWithContext(ctx, req.ContextID)
 	if err != nil {
 		return RevealAllHiddenResponse{}, err
 	}
@@ -191,8 +192,8 @@ type HiddenItemsResponse struct {
 	Items []Item
 }
 
-func (s *AppService) HiddenItems(req HiddenItemsRequest) (HiddenItemsResponse, error) {
-	items, err := s.store.hiddenItems(req.ContextID)
+func (s *AppService) HiddenItems(ctx context.Context, req HiddenItemsRequest) (HiddenItemsResponse, error) {
+	items, err := s.store.hiddenItemsWithContext(ctx, req.ContextID)
 	if err != nil {
 		return HiddenItemsResponse{}, err
 	}
@@ -211,16 +212,16 @@ type UnhideAtResponse struct {
 	HiddenCount int
 }
 
-func (s *AppService) UnhideAt(req UnhideAtRequest) (UnhideAtResponse, error) {
-	if err := s.store.unhideAt(req.ID, req.ContextID, req.X, req.Y); err != nil {
+func (s *AppService) UnhideAt(ctx context.Context, req UnhideAtRequest) (UnhideAtResponse, error) {
+	if err := s.store.unhideAtWithContext(ctx, req.ID, req.ContextID, req.X, req.Y); err != nil {
 		return UnhideAtResponse{}, err
 	}
-	item, err := s.store.touchItemState(req.ID)
+	item, err := s.store.touchItemStateWithContext(ctx, req.ID)
 	if err != nil {
 		return UnhideAtResponse{}, err
 	}
 	hiddenN := 0
-	count, countErr := s.store.hiddenCount(req.ContextID)
+	count, countErr := s.store.hiddenCountWithContext(ctx, req.ContextID)
 	if countErr == nil {
 		hiddenN = count
 	}
@@ -240,7 +241,7 @@ type ContextUpsertResponse struct {
 	ID string
 }
 
-func (s *AppService) UpsertContext(req ContextUpsertRequest) (ContextUpsertResponse, error) {
+func (s *AppService) UpsertContext(ctx context.Context, req ContextUpsertRequest) (ContextUpsertResponse, error) {
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
 		id = fmt.Sprintf("c_%d", time.Now().UnixNano())
@@ -255,7 +256,7 @@ func (s *AppService) UpsertContext(req ContextUpsertRequest) (ContextUpsertRespo
 		Color:   "var(--c1)",
 	}
 
-	existing, err := s.store.contextByID(id)
+	existing, err := s.store.contextByIDWithContext(ctx, id)
 	if err == nil {
 		c = *existing
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -283,7 +284,7 @@ func (s *AppService) UpsertContext(req ContextUpsertRequest) (ContextUpsertRespo
 	if c.Color == "" {
 		c.Color = "var(--c1)"
 	}
-	if err := s.store.upsertContext(c); err != nil {
+	if err := s.store.upsertContextWithContext(ctx, c); err != nil {
 		return ContextUpsertResponse{}, err
 	}
 	return ContextUpsertResponse{ID: c.ID}, nil
@@ -293,6 +294,6 @@ type DeleteContextRequest struct {
 	ID string
 }
 
-func (s *AppService) DeleteContext(req DeleteContextRequest) error {
-	return s.store.deleteContext(req.ID)
+func (s *AppService) DeleteContext(ctx context.Context, req DeleteContextRequest) error {
+	return s.store.deleteContextWithContext(ctx, req.ID)
 }
