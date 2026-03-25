@@ -1,14 +1,19 @@
 export function createPinTouchCompleteController({
-  mode,
-  currentContextId,
-  getTransport,
-  readPinPayload,
-  cancelPendingSave,
-  applyTouchResponse,
-  showCanvasWarning,
-  showTouchUndo,
-  handleCompleteSuccess,
+  runtime,
+  touchEffects,
+  completeEffects,
 }) {
+  const {
+    mode,
+    currentContextId,
+    getTransport,
+    readPinPayload,
+    cancelPendingSave,
+    showCanvasWarning,
+  } = runtime;
+  const {applyTouchResponse, showTouchUndo} = touchEffects;
+  const {handleCompleteSuccess} = completeEffects;
+
   async function touchPinImmediate(pin) {
     if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
     if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
