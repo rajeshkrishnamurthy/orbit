@@ -685,15 +685,23 @@ void (async () => {
   }
 
   items.forEach((item) => createPin(item, false, true));
+  surface.addEventListener('dragover', (event) => {
+    hiddenTrayState.handleSurfaceDragOver(event, {setDragHalo});
+  });
 
+  surface.addEventListener('dragleave', (event) => {
+    hiddenTrayState.handleSurfaceDragLeave(event, {surface, setDragHalo});
+  });
 
-  dragDropState.bindSurfaceInteractions(hiddenTrayState, {
-    surface,
-    setDragHalo,
-    getCanvasViewportRect,
-    createPin,
-    showCanvasWarning,
-    showResurfaceAck,
+  surface.addEventListener('drop', (event) => {
+    void hiddenTrayState.handleSurfaceDrop(event, {
+      surface,
+      setDragHalo,
+      getCanvasViewportRect,
+      createPin,
+      showCanvasWarning,
+      showResurfaceAck,
+    });
   });
 
   window.addEventListener('keydown', (ev) => {

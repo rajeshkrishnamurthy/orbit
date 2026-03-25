@@ -83,36 +83,7 @@ export function createDragDropController({
     });
   }
 
-  function bindSurfaceInteractions(hiddenTrayState, {
-    surface,
-    setDragHalo,
-    getCanvasViewportRect,
-    createPin,
-    showCanvasWarning,
-    showResurfaceAck,
-  }) {
-    surface.addEventListener('dragover', (event) => {
-      hiddenTrayState.handleSurfaceDragOver(event, {setDragHalo});
-    });
-
-    surface.addEventListener('dragleave', (event) => {
-      hiddenTrayState.handleSurfaceDragLeave(event, {surface, setDragHalo});
-    });
-
-    surface.addEventListener('drop', (event) => {
-      void hiddenTrayState.handleSurfaceDrop(event, {
-        surface,
-        setDragHalo,
-        getCanvasViewportRect,
-        createPin,
-        showCanvasWarning,
-        showResurfaceAck,
-      });
-    });
-  }
-
   return {
     bindPinDrag,
-    bindSurfaceInteractions,
   };
 }
