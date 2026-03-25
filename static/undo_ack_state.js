@@ -39,14 +39,14 @@ export function createUndoAckController({
     if (!systemAckArea) return;
     clearSystemAck();
     systemAckArea.appendChild(el);
-    refreshAckMode();
-    syncCanvasViewportRect();
     systemAckState = {
       el,
       timer: durationMs > 0 ? setTimeout(() => {
         clearSystemAck();
       }, durationMs) : null,
     };
+    refreshAckMode();
+    syncCanvasViewportRect();
   }
 
   function buildSystemAck({ kind, className, label, token, buttonLabel, onButton, durationMs = 0 }) {
