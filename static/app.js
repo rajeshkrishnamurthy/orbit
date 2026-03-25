@@ -5,6 +5,7 @@ void (async () => {
     {createDragDropController},
     {createPinDomController},
     {createMutationOrchestrator},
+    {createPinDestructiveController},
     {createPinPresenter},
     {createPinTouchCompleteController},
     {createUndoAckController},
@@ -14,6 +15,7 @@ void (async () => {
     import('/static/drag_drop_state.js'),
     import('/static/pin_dom.js'),
     import('/static/mutation_orchestrator.js'),
+    import('/static/pin_destructive.js'),
     import('/static/pin_presenter.js'),
     import('/static/pin_touch_complete.js'),
     import('/static/undo_ack_state.js'),
@@ -181,22 +183,6 @@ void (async () => {
   contextConfirm.addEventListener('pointerdown', (ev) => ev.stopPropagation());
   contextConfirm.addEventListener('click', (ev) => ev.stopPropagation());
 
-  function confirmContextDelete(name){
-    return new Promise((resolve) => {
-      const close = (ok) => {
-        contextConfirm.hidden = true;
-        contextConfirmCancelEl.onclick = null;
-        contextConfirmDeleteEl.onclick = null;
-        resolve(ok);
-      };
-      const label = (name && String(name).trim()) ? `"${String(name).trim()}"` : 'this context';
-      contextConfirmBodyEl.textContent = `Delete ${label}? This will also delete all items inside this context.`;
-      contextConfirm.hidden = false;
-      contextConfirmCancelEl.onclick = () => close(false);
-      contextConfirmDeleteEl.onclick = () => close(true);
-    });
-  }
-
   function stripWidth(){
     return (systemStrip || layoutShell).getBoundingClientRect().width;
   }
@@ -252,6 +238,24 @@ void (async () => {
     showTouchUndo: undoAckController.showTouchUndo,
     handleCompleteSuccess: undoAckController.handleCompleteSuccess,
   });
+  const pinDestructiveController = createPinDestructiveController({
+    mode,
+    currentContextId,
+    getTransport: getMutationTransport,
+    readPinPayload: pinPayload,
+    cancelPendingSave,
+    showCanvasWarning,
+    handleHideSuccess: hiddenTrayState.handleHideSuccess,
+    forgetPin: lensState.forgetPin,
+    clearActivePin,
+    showDeleteUndo: undoAckController.showDeleteUndo,
+    contextDeleteConfirm: {
+      root: contextConfirm,
+      bodyEl: contextConfirmBodyEl,
+      cancelEl: contextConfirmCancelEl,
+      deleteEl: contextConfirmDeleteEl,
+    },
+  });
 
   const pinDomController = createPinDomController({
     surface,
@@ -268,11 +272,11 @@ void (async () => {
     },
     pinActions: {
       save: savePin,
-      hide: hidePinImmediate,
-      delete: deletePinImmediate,
+      hide: pinDestructiveController.hidePinImmediate,
+      delete: pinDestructiveController.deletePinImmediate,
       touch: pinTouchCompleteController.touchPinImmediate,
       complete: pinTouchCompleteController.completePinImmediate,
-      discardIfEmpty,
+      discardIfEmpty: pinDestructiveController.discardIfEmpty,
     },
   });
 
@@ -371,109 +375,15 @@ void (async () => {
     pin.dataset.state = state;
     if (state !== 'active' && activePin === pin) setActivePin(null);
   }
+  function clearActivePin(pin){
+    if (activePin === pin) setActivePin(null);
+  }
   function savePin(pin){
     mutationOrchestrator.savePin(pin);
   }
 
-  async function hidePinImmediate(pin){
-    if (pin.dataset.hidePending === 'true') return;
-    cancelPendingSave(pin.dataset.id);
-    pin.dataset.hidePending = 'true';
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.hideItem({id: pin.dataset.id, contextId: currentContextId});
-      if (!result.ok) {
-        transport.logMutationFailure({
-          operation: 'hide-pin',
-          id: pin.dataset.id,
-          contextId: currentContextId,
-          endpoint: result.endpoint,
-          status: result.status,
-          error: result.error,
-        });
-        showCanvasWarning('Unable to hide card. Please try again.');
-        return;
-      }
-      const d = result.data;
-      hiddenTrayState.handleHideSuccess(d);
-      lensState.forgetPin(pin.dataset.id);
-      if (activePin === pin) setActivePin(null);
-      pin.remove();
-      return;
-    } catch (_err) {
-      showCanvasWarning('Unable to hide card. Please try again.');
-    } finally {
-      if (pin.isConnected) {
-        pin.dataset.hidePending = 'false';
-      }
-    }
-  }
-
-  async function deletePinImmediate(pin){
-    if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
-    const payload = pinPayload(pin);
-
-    if (mode === 'contexts') {
-      const ok = await confirmContextDelete(payload.title);
-      if (!ok) return;
-    }
-
-    // Prevent pending autosave from recreating a just-deleted card/context.
-    cancelPendingSave(payload.id);
-
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.deleteEntity({mode, id: payload.id});
-      if (!result.ok) {
-        transport.logMutationFailure({
-          operation: mode === 'focus' ? 'delete-pin' : 'delete-context',
-          id: payload.id,
-          contextId: currentContextId,
-          endpoint: result.endpoint,
-          status: result.status,
-          error: result.error,
-        });
-        if (mode === 'contexts' && result.warningMessage) {
-          showCanvasWarning(result.warningMessage);
-        }
-        return;
-      }
-    } catch (_err) {
-      if (mode === 'contexts') showCanvasWarning('Unable to delete context. Please try again.');
-      return;
-    }
-
-    lensState.forgetPin(pin.dataset.id);
-    if (activePin === pin) setActivePin(null);
-    pin.remove();
-    if (mode === 'contexts') {
-      location.reload();
-      return;
-    }
-    if (mode === 'focus') showDeleteUndo(payload);
-  }
-
-  function showDeleteUndo(payload){
-    undoAckController.showDeleteUndo(payload);
-  }
-
   function showResurfaceAck(){
     undoAckController.showResurfaceAck();
-  }
-
-  function discardIfEmpty(pin){
-    const title = pin.querySelector('.pin-title input').value.trim();
-    const note = pin.querySelector('.pin-note textarea').value.trim();
-    if (title || note) return;
-    pin.classList.add('discarding');
-    setTimeout(async () => {
-      try {
-        const transport = await getMutationTransport();
-        transport.deleteEntityFireAndForget({mode, id: pin.dataset.id, contextId: currentContextId});
-      } catch (_err) {}
-      if (activePin === pin) setActivePin(null);
-      pin.remove();
-    }, 130);
   }
 
   function createPin(item, focusTitle = false, markSaved = false){
