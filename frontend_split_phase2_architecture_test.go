@@ -28,7 +28,6 @@ func TestFrontendSplitPhase2ArchitectureRED(t *testing.T) {
 			"const DRAG_THRESHOLD_PX =",
 			"function openHiddenTray(",
 			"function renderHiddenTrayItems(",
-			"surface.addEventListener('drop',",
 		}
 		for _, snippet := range disallowed {
 			if strings.Contains(appJS, snippet) {
@@ -45,6 +44,19 @@ func TestFrontendSplitPhase2ArchitectureRED(t *testing.T) {
 
 		if len(nonTransport) < 3 {
 			t.Fatalf("app.js must import at least 3 non-transport static modules for phase2 concerns; found %d: %v", len(nonTransport), nonTransport)
+		}
+	})
+
+	t.Run("app.js keeps one-way drag surface orchestration", func(t *testing.T) {
+		required := []string{
+			"hiddenTrayState.handleSurfaceDragOver(",
+			"hiddenTrayState.handleSurfaceDragLeave(",
+			"hiddenTrayState.handleSurfaceDrop(",
+		}
+		for _, snippet := range required {
+			if !strings.Contains(appJS, snippet) {
+				t.Fatalf("app.js must keep explicit one-way surface drag orchestration via hidden tray controller (%q)", snippet)
+			}
 		}
 	})
 
@@ -75,8 +87,8 @@ func TestFrontendSplitPhase2ArchitectureRED(t *testing.T) {
 			{
 				name: "drag/drop interaction state",
 				options: [][]string{
-					{"dragThresholdPx", "bindPin("},
-					{"addEventListener('dragover'", "addEventListener('drop'"},
+					{"dragThresholdPx", "bindPinDrag("},
+					{"handleSurfaceDragOver(", "handleSurfaceDrop("},
 				},
 			},
 		}
