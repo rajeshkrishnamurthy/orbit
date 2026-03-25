@@ -1,15 +1,19 @@
-export function createPinDestructiveController({
-  mode,
-  currentContextId,
-  getTransport,
-  readPinPayload,
-  cancelPendingSave,
-  showCanvasWarning,
-  confirmContextDelete,
-  handleHideSuccess,
-  handleDeleteSuccess,
-  handleDiscardRemove,
-}) {
+export function createPinDestructiveController({runtime, effects}) {
+  const {
+    mode,
+    currentContextId,
+    getTransport,
+    readPinPayload,
+    cancelPendingSave,
+    showCanvasWarning,
+  } = runtime;
+  const {
+    confirmContextDelete,
+    handleHideSuccess,
+    handleDeleteSuccess,
+    handleDiscardRemove,
+  } = effects;
+
   async function hidePinImmediate(pin) {
     if (pin.dataset.hidePending === 'true') return;
     cancelPendingSave(pin.dataset.id);

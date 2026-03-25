@@ -243,45 +243,49 @@ void (async () => {
     setActivePin,
     applyTouchResponse,
   });
-  const pinDestructiveController = createPinDestructiveController({
+  const pinMutationRuntime = {
     mode,
     currentContextId,
     getTransport: getMutationTransport,
     readPinPayload: pinPayload,
     cancelPendingSave,
     showCanvasWarning,
-    confirmContextDelete,
-    handleHideSuccess(data, pin) {
-      hiddenTrayState.handleHideSuccess(data);
-      lensState.forgetPin(pin.dataset.id);
-      if (activePin === pin) setActivePin(null);
-      pin.remove();
-    },
-    handleDeleteSuccess(pin, payload) {
-      lensState.forgetPin(pin.dataset.id);
-      if (activePin === pin) setActivePin(null);
-      pin.remove();
-      if (mode === 'contexts') {
-        location.reload();
-        return;
-      }
-      if (mode === 'focus') undoAckController.showDeleteUndo(payload);
-    },
-    handleDiscardRemove(pin) {
-      if (activePin === pin) setActivePin(null);
-      pin.remove();
+  };
+  const pinDestructiveController = createPinDestructiveController({
+    runtime: pinMutationRuntime,
+    effects: {
+      confirmContextDelete,
+      handleHideSuccess(data, pin) {
+        hiddenTrayState.handleHideSuccess(data);
+        lensState.forgetPin(pin.dataset.id);
+        if (activePin === pin) setActivePin(null);
+        pin.remove();
+      },
+      handleDeleteSuccess(pin, payload) {
+        lensState.forgetPin(pin.dataset.id);
+        if (activePin === pin) setActivePin(null);
+        pin.remove();
+        if (mode === 'contexts') {
+          location.reload();
+          return;
+        }
+        if (mode === 'focus') undoAckController.showDeleteUndo(payload);
+      },
+      handleDiscardRemove(pin) {
+        if (activePin === pin) setActivePin(null);
+        pin.remove();
+      },
     },
   });
   const pinTouchCompleteController = createPinTouchCompleteController({
-    mode,
-    currentContextId,
-    getTransport: getMutationTransport,
-    readPinPayload: pinPayload,
-    cancelPendingSave,
-    applyTouchResponse,
-    showCanvasWarning,
-    showTouchUndo: undoAckController.showTouchUndo,
-    handleCompleteSuccess: undoAckController.handleCompleteSuccess,
+    runtime: pinMutationRuntime,
+    touchEffects: {
+      applyTouchResponse,
+      showTouchUndo: undoAckController.showTouchUndo,
+    },
+    completeEffects: {
+      handleCompleteSuccess: undoAckController.handleCompleteSuccess,
+    },
   });
 
   const pinDomController = createPinDomController({
