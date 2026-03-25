@@ -4,11 +4,13 @@ void (async () => {
     {createHiddenTrayController},
     {createDragDropController},
     {createPinDomController},
+    {createMutationOrchestrator},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
     import('/static/drag_drop_state.js'),
     import('/static/pin_dom.js'),
+    import('/static/mutation_orchestrator.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
@@ -101,8 +103,7 @@ void (async () => {
   toolbar.append(colorsPanel, filtersTray);
   const contextNameEl = document.getElementById('context-name');
   const openContextsEl = document.getElementById('open-contexts');
-  let contextTitlePersisted = contextNameEl ? ((contextNameEl.textContent || '').trim() || 'Main Orbit') : 'Main Orbit';
-  let contextTitleSaveSeq = 0;
+  const initialContextTitle = contextNameEl ? ((contextNameEl.textContent || '').trim() || 'Main Orbit') : 'Main Orbit';
   let mutationTransportPromise = null;
   function getMutationTransport(){
     if (!mutationTransportPromise) {
@@ -111,36 +112,18 @@ void (async () => {
     }
     return mutationTransportPromise;
   }
+  const mutationOrchestrator = createMutationOrchestrator({
+    mode,
+    currentContextId,
+    initialContextTitle,
+    getTransport: getMutationTransport,
+    showCanvasWarning,
+    readPinPayload: pinPayload,
+    markPersisted,
+    applyTouchResponse,
+  });
   async function persistContextTitle(){
-    if (!contextNameEl) return;
-    const nextTitle = (contextNameEl.textContent || '').trim() || 'Main Orbit';
-    contextNameEl.textContent = nextTitle;
-    const previousTitle = contextTitlePersisted;
-    if (nextTitle === previousTitle) return;
-    const saveSeq = ++contextTitleSaveSeq;
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.saveContextTitle({contextId: currentContextId, title: nextTitle});
-      if (saveSeq !== contextTitleSaveSeq) return;
-      if (!result.ok) {
-        transport.logMutationFailure({
-          operation: 'context-title-save',
-          id: currentContextId,
-          contextId: currentContextId,
-          endpoint: result.endpoint,
-          status: result.status,
-          error: result.error,
-        });
-        contextNameEl.textContent = previousTitle;
-        showCanvasWarning('Unable to save context title. Restored previous value.');
-        return;
-      }
-      contextTitlePersisted = nextTitle;
-    } catch (_err) {
-      if (saveSeq !== contextTitleSaveSeq) return;
-      contextNameEl.textContent = previousTitle;
-      showCanvasWarning('Unable to save context title. Restored previous value.');
-    }
+    return mutationOrchestrator.persistContextTitle(contextNameEl);
   }
   if (mode === 'focus' && contextNameEl) {
     contextNameEl.contentEditable = 'true';
@@ -554,16 +537,12 @@ void (async () => {
     return 'var(--c1)';
   }
 
-  const pending = new Map();
-  const saveRequestSeq = new Map();
-
   function markPersisted(pin){
     pin.dataset.persistedTitle = pin.querySelector('.pin-title input').value;
     pin.dataset.persistedSubNote = pin.querySelector('.pin-note textarea').value;
   }
   function cancelPendingSave(id){
-    clearTimeout(pending.get(id));
-    pending.delete(id);
+    mutationOrchestrator.cancelPendingSave(id);
   }
   function pinPayload(pin){
     return {
@@ -583,41 +562,7 @@ void (async () => {
     if (state !== 'active' && activePin === pin) setActivePin(null);
   }
   function savePin(pin){
-    if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
-    const id = pin.dataset.id;
-    const payload = pinPayload(pin);
-    cancelPendingSave(id);
-    pending.set(id, setTimeout(async () => {
-      const saveSeq = (saveRequestSeq.get(id) || 0) + 1;
-      saveRequestSeq.set(id, saveSeq);
-      try {
-        const transport = await getMutationTransport();
-        const result = await transport.saveModeEntity({mode, payload});
-        if (saveRequestSeq.get(id) !== saveSeq) return;
-        if (!result.ok) {
-          transport.logMutationFailure({
-            operation: mode === 'focus' ? 'save-pin' : 'save-context-card',
-            id,
-            contextId: currentContextId,
-            endpoint: result.endpoint,
-            status: result.status,
-            error: result.error,
-          });
-          pin.dataset.saved = 'false';
-          showCanvasWarning(mode === 'focus' ? 'Unable to save card changes. Your edits are kept locally.' : 'Unable to save context changes. Your edits are kept locally.');
-          return;
-        }
-        const data = result.data;
-        if (saveRequestSeq.get(id) !== saveSeq) return;
-        if (data) applyTouchResponse(pin, data);
-        pin.dataset.saved = 'true';
-        markPersisted(pin);
-      } catch (_err) {
-        if (saveRequestSeq.get(id) !== saveSeq) return;
-        pin.dataset.saved = 'false';
-        showCanvasWarning(mode === 'focus' ? 'Unable to save card changes. Your edits are kept locally.' : 'Unable to save context changes. Your edits are kept locally.');
-      }
-    }, 180));
+    mutationOrchestrator.savePin(pin);
   }
 
   async function hidePinImmediate(pin){
