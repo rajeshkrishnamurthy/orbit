@@ -101,7 +101,12 @@ export function createPinDomController({
       });
     }
 
-    dragDropState.bindPinDrag(pin, pinUi.setActive);
+    dragDropState.bindPinDrag(pin, {
+      setActivePin: pinUi.setActive,
+      setDragHalo: pinUi.setDragHalo,
+      applyDistanceStyle: pinUi.applyDistanceStyle,
+      savePin: pinActions.save,
+    });
 
     pin.querySelectorAll('input, textarea').forEach((input) => {
       input.addEventListener('input', () => {

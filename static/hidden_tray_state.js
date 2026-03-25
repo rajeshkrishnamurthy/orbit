@@ -2,16 +2,10 @@ export function createHiddenTrayController({
   layoutShell,
   systemStrip,
   filtersControls,
-  surface,
   mode,
   currentContextId,
   initialHiddenCount,
   getMutationTransport,
-  getCanvasViewportRect,
-  setDragHalo,
-  createPin,
-  showCanvasWarning,
-  showResurfaceAck,
   syncCanvasViewportRect,
 }) {
   let hiddenCount = initialHiddenCount || 0;
@@ -146,7 +140,7 @@ export function createHiddenTrayController({
     return trayOpen;
   }
 
-  function handleSurfaceDragOver(event) {
+  function handleSurfaceDragOver(event, {setDragHalo}) {
     if (!trayOpen) return;
     if (event.dataTransfer && event.dataTransfer.types.includes('text/orbit-hidden-id')) {
       event.preventDefault();
@@ -154,13 +148,20 @@ export function createHiddenTrayController({
     }
   }
 
-  function handleSurfaceDragLeave(event) {
+  function handleSurfaceDragLeave(event, {surface, setDragHalo}) {
     if (!trayOpen || mode !== 'focus') return;
     const next = event.relatedTarget;
     if (!next || !surface.contains(next)) setDragHalo(false);
   }
 
-  async function handleSurfaceDrop(event) {
+  async function handleSurfaceDrop(event, {
+    surface,
+    setDragHalo,
+    getCanvasViewportRect,
+    createPin,
+    showCanvasWarning,
+    showResurfaceAck,
+  }) {
     if (!trayOpen || mode !== 'focus') return;
     const id = event.dataTransfer && event.dataTransfer.getData('text/orbit-hidden-id');
     if (!id) return;

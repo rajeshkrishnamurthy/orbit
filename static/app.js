@@ -198,23 +198,16 @@ void (async () => {
     mode,
     centerSemantics,
     syncCanvasViewportRect,
-    syncTouchState,
   });
 
   hiddenTrayState = createHiddenTrayController({
     layoutShell,
     systemStrip,
     filtersControls,
-    surface,
     mode,
     currentContextId,
     initialHiddenCount: window.__HIDDEN_COUNT__ || 0,
     getMutationTransport,
-    getCanvasViewportRect,
-    setDragHalo,
-    createPin,
-    showCanvasWarning,
-    showResurfaceAck,
     syncCanvasViewportRect,
   });
 
@@ -222,9 +215,6 @@ void (async () => {
     surface,
     mode,
     dragThresholdPx: 5,
-    setDragHalo,
-    applyDistanceStyle,
-    savePin,
   });
 
   const undoAckController = createUndoAckController({
@@ -252,6 +242,7 @@ void (async () => {
       setActive: setActivePin,
       setColor: setPinColor,
       setSlipping,
+      setDragHalo,
       applyDistanceStyle,
     },
     pinActions: {
@@ -290,6 +281,7 @@ void (async () => {
 
   function applyDistanceStyle(pin){
     lensState.applyDistanceStyle(pin);
+    syncTouchState(pin);
   }
 
   function setDragHalo(active){
@@ -695,7 +687,14 @@ void (async () => {
   items.forEach((item) => createPin(item, false, true));
 
 
-  dragDropState.bindSurfaceInteractions(hiddenTrayState);
+  dragDropState.bindSurfaceInteractions(hiddenTrayState, {
+    surface,
+    setDragHalo,
+    getCanvasViewportRect,
+    createPin,
+    showCanvasWarning,
+    showResurfaceAck,
+  });
 
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;

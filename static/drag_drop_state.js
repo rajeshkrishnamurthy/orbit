@@ -2,11 +2,13 @@ export function createDragDropController({
   surface,
   mode,
   dragThresholdPx,
-  setDragHalo,
-  applyDistanceStyle,
-  savePin,
 }) {
-  function bindPinDrag(pin, setActivePin) {
+  function bindPinDrag(pin, {
+    setActivePin,
+    setDragHalo,
+    applyDistanceStyle,
+    savePin,
+  }) {
     pin.addEventListener('pointerdown', (event) => {
       if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
       setActivePin(pin);
@@ -81,17 +83,31 @@ export function createDragDropController({
     });
   }
 
-  function bindSurfaceInteractions(hiddenTrayState) {
+  function bindSurfaceInteractions(hiddenTrayState, {
+    surface,
+    setDragHalo,
+    getCanvasViewportRect,
+    createPin,
+    showCanvasWarning,
+    showResurfaceAck,
+  }) {
     surface.addEventListener('dragover', (event) => {
-      hiddenTrayState.handleSurfaceDragOver(event);
+      hiddenTrayState.handleSurfaceDragOver(event, {setDragHalo});
     });
 
     surface.addEventListener('dragleave', (event) => {
-      hiddenTrayState.handleSurfaceDragLeave(event);
+      hiddenTrayState.handleSurfaceDragLeave(event, {surface, setDragHalo});
     });
 
     surface.addEventListener('drop', (event) => {
-      void hiddenTrayState.handleSurfaceDrop(event);
+      void hiddenTrayState.handleSurfaceDrop(event, {
+        surface,
+        setDragHalo,
+        getCanvasViewportRect,
+        createPin,
+        showCanvasWarning,
+        showResurfaceAck,
+      });
     });
   }
 

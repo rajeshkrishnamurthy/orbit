@@ -7,7 +7,6 @@ export function createLensStateController({
   mode,
   centerSemantics,
   syncCanvasViewportRect,
-  syncTouchState,
 }) {
   const semanticContract = normalizeCenterSemantics(centerSemantics);
   const canonicalLensRatio = semanticContract ? semanticContract.lensRatio : 0.68;
@@ -242,7 +241,6 @@ export function createLensStateController({
     title.style.fontWeight = String(titleWeight);
     note.style.fontSize = `${bodySize.toFixed(2)}px`;
     note.style.fontWeight = '480';
-    syncTouchState(pin);
   }
 
   function registerPin(id, markSaved) {
