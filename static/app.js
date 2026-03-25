@@ -6,6 +6,7 @@ void (async () => {
     {createPinDomController},
     {createMutationOrchestrator},
     {createPinPresenter},
+    {createPinTouchCompleteController},
     {createUndoAckController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
@@ -14,6 +15,7 @@ void (async () => {
     import('/static/pin_dom.js'),
     import('/static/mutation_orchestrator.js'),
     import('/static/pin_presenter.js'),
+    import('/static/pin_touch_complete.js'),
     import('/static/undo_ack_state.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
@@ -239,6 +241,17 @@ void (async () => {
     setActivePin,
     applyTouchResponse,
   });
+  const pinTouchCompleteController = createPinTouchCompleteController({
+    mode,
+    currentContextId,
+    getTransport: getMutationTransport,
+    readPinPayload: pinPayload,
+    cancelPendingSave,
+    applyTouchResponse,
+    showCanvasWarning,
+    showTouchUndo: undoAckController.showTouchUndo,
+    handleCompleteSuccess: undoAckController.handleCompleteSuccess,
+  });
 
   const pinDomController = createPinDomController({
     surface,
@@ -257,8 +270,8 @@ void (async () => {
       save: savePin,
       hide: hidePinImmediate,
       delete: deletePinImmediate,
-      touch: touchPinImmediate,
-      complete: completePinImmediate,
+      touch: pinTouchCompleteController.touchPinImmediate,
+      complete: pinTouchCompleteController.completePinImmediate,
       discardIfEmpty,
     },
   });
@@ -446,69 +459,6 @@ void (async () => {
 
   function showResurfaceAck(){
     undoAckController.showResurfaceAck();
-  }
-
-  function showTouchUndo(pin, payload){
-    undoAckController.showTouchUndo(pin, payload);
-  }
-
-  async function touchPinImmediate(pin){
-    if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
-    if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
-    const payload = pinPayload(pin);
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.touchItem({id: payload.id});
-      if (!result.ok) {
-        transport.logMutationFailure({
-          operation: 'touch-pin',
-          id: payload.id,
-          contextId: currentContextId,
-          endpoint: result.endpoint,
-          status: result.status,
-          error: result.error || `touch failed (${result.status})`,
-        });
-        if (result.status == null) showCanvasWarning('Unable to touch card. Please try again.');
-        else showCanvasWarning(result.error || 'Unable to touch card.');
-        return;
-      }
-      const data = result.data;
-      applyTouchResponse(pin, data);
-      if (data.touched) showTouchUndo(pin, payload);
-    } catch (_err) {
-      showCanvasWarning('Unable to touch card. Please try again.');
-    }
-  }
-
-  async function completePinImmediate(pin){
-    if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
-    if (pin.dataset.transitioning === 'true' || pin.dataset.state === 'completed') return;
-    const payload = pinPayload(pin);
-    pin.dataset.transitioning = 'true';
-    cancelPendingSave(payload.id);
-    try {
-      const transport = await getMutationTransport();
-      const result = await transport.setItemCompleted({id: payload.id, completed: true});
-      if (!result.ok) {
-        pin.dataset.transitioning = 'false';
-        transport.logMutationFailure({
-          operation: 'complete-pin',
-          id: payload.id,
-          contextId: currentContextId,
-          endpoint: result.endpoint,
-          status: result.status,
-          error: result.error || `complete failed (${result.status})`,
-        });
-        if (result.status == null) showCanvasWarning('Unable to complete card. Please try again.');
-        else showCanvasWarning(result.error || 'Unable to complete card.');
-        return;
-      }
-    } catch (_err) {
-      pin.dataset.transitioning = 'false';
-      showCanvasWarning('Unable to complete card. Please try again.');
-      return;
-    }
-    undoAckController.handleCompleteSuccess(pin, payload);
   }
 
   function discardIfEmpty(pin){
