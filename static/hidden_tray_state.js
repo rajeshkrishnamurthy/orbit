@@ -73,11 +73,31 @@ export function createHiddenTrayController({
       hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
       return;
     }
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const snoozeDaysLeftFor = (item) => {
+      const rawWakeAt = item && typeof item.snoozeWakeAt === 'string' ? item.snoozeWakeAt : '';
+      if (!rawWakeAt) return null;
+      const wakeAtMs = Date.parse(rawWakeAt);
+      if (!Number.isFinite(wakeAtMs)) return null;
+      const remainingMs = wakeAtMs - Date.now();
+      if (remainingMs <= 0) return null;
+      return Math.max(1, Math.ceil(remainingMs / msPerDay));
+    };
     hiddenItemsCache.forEach((item) => {
       const trayItem = document.createElement('div');
       trayItem.className = 'hidden-tray-item';
       trayItem.dataset.id = item.id;
-      trayItem.textContent = item.title || 'Untitled';
+      const title = document.createElement('span');
+      title.className = 'hidden-tray-item__title';
+      title.textContent = item.title || 'Untitled';
+      trayItem.appendChild(title);
+      const snoozeDaysLeft = snoozeDaysLeftFor(item);
+      if (snoozeDaysLeft !== null) {
+        const snooze = document.createElement('span');
+        snooze.className = 'hidden-tray-item__snooze';
+        snooze.textContent = `${snoozeDaysLeft}d left`;
+        trayItem.appendChild(snooze);
+      }
       trayItem.draggable = true;
       trayItem.addEventListener('dragstart', (ev) => {
         showHiddenDragPreview(item.title || 'Untitled', ev);
@@ -161,6 +181,7 @@ export function createHiddenTrayController({
     createPin,
     showCanvasWarning,
     showResurfaceAck,
+    onUnhideSuccess,
   }) {
     if (!trayOpen || mode !== 'focus') return;
     const id = event.dataTransfer && event.dataTransfer.getData('text/orbit-hidden-id');
@@ -200,6 +221,7 @@ export function createHiddenTrayController({
       pendingUnhide.delete(id);
       const restoredItem = data && data.item ? { ...pending.item, ...data.item, x, y } : { ...pending.item, x, y };
       if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
+      if (typeof onUnhideSuccess === 'function') onUnhideSuccess(id);
       showResurfaceAck();
     } catch (_err) {
       const pending = pendingUnhide.get(id);

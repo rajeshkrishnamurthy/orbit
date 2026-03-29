@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite" // Registers the SQLite driver with database/sql.
 )
@@ -27,23 +28,24 @@ import (
 var embeddedAssets embed.FS
 
 type Item struct {
-	ID             string    `json:"id"`
-	ContextID      string    `json:"contextId,omitempty"`
-	Title          string    `json:"title"`
-	SubNote        string    `json:"subNote"`
-	X              float64   `json:"x"`
-	Y              float64   `json:"y"`
-	Color          string    `json:"color"`
-	Hidden         bool      `json:"hidden,omitempty"`
-	Slipping       bool      `json:"slipping,omitempty"`
-	Completed      bool      `json:"completed,omitempty"`
-	InCenter       bool      `json:"inCenter,omitempty"`
-	Active         bool      `json:"active"`
-	Stale          bool      `json:"stale"`
-	TouchedToday   bool      `json:"touchedToday"`
-	TouchCount7d   int       `json:"touchCount7d"`
-	LastTouchedDay string    `json:"lastTouchedDay"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID             string     `json:"id"`
+	ContextID      string     `json:"contextId,omitempty"`
+	Title          string     `json:"title"`
+	SubNote        string     `json:"subNote"`
+	X              float64    `json:"x"`
+	Y              float64    `json:"y"`
+	Color          string     `json:"color"`
+	Hidden         bool       `json:"hidden,omitempty"`
+	Slipping       bool       `json:"slipping,omitempty"`
+	Completed      bool       `json:"completed,omitempty"`
+	InCenter       bool       `json:"inCenter,omitempty"`
+	Active         bool       `json:"active"`
+	Stale          bool       `json:"stale"`
+	TouchedToday   bool       `json:"touchedToday"`
+	TouchCount7d   int        `json:"touchCount7d"`
+	LastTouchedDay string     `json:"lastTouchedDay"`
+	SnoozeWakeAt   *time.Time `json:"snoozeWakeAt,omitempty"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 type Context struct {
@@ -54,6 +56,13 @@ type Context struct {
 	Y         float64   `json:"y"`
 	Color     string    `json:"color"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type ActivityLogEntry struct {
+	ID        string    `json:"id"`
+	ItemID    string    `json:"itemId"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type Store struct {
@@ -67,6 +76,7 @@ type App struct {
 }
 
 const requestTimeout = 5 * time.Second
+const activityLogMaxChars = 140
 
 func (a *App) appService() *AppService {
 	if a.service == nil {
@@ -129,8 +139,11 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/touch/undo", app.undoTouchItemAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
+	mux.HandleFunc("/api/items/resurfaced", app.resurfacedItemsAPI)
 	mux.HandleFunc("/api/items/unhide-at", app.unhideAtAPI)
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
+	mux.HandleFunc("/api/items/activity-log/add", app.addActivityLogAPI)
+	mux.HandleFunc("/api/items/activity-log/latest", app.latestActivityLogAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
 	return mux, nil
@@ -237,6 +250,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	var (
 		itemsJSONBytes []byte
 		itemsJSON      template.JS
+		resurfacedJSON = template.JS("[]")
 	)
 	if resp.Mode == "contexts" {
 		itemsJSONBytes, err = json.Marshal(resp.Contexts)
@@ -250,6 +264,12 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 			return
 		}
+		resurfacedJSONBytes, marshalErr := json.Marshal(resp.ResurfacedItems)
+		if marshalErr != nil {
+			writePageError(w, marshalErr, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+			return
+		}
+		resurfacedJSON = template.JS(resurfacedJSONBytes)
 	}
 	itemsJSON = template.JS(itemsJSONBytes)
 	semanticsJSONBytes, err := json.Marshal(centerPeripherySemantics())
@@ -264,6 +284,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		"Mode":                resp.Mode,
 		"CurrentContextID":    resp.CurrentContextID,
 		"CurrentContextTitle": resp.CurrentContextTitle,
+		"ResurfacedItemsJSON": resurfacedJSON,
 		"CenterSemanticsJSON": semanticsJSON,
 		"MobileMode":          resp.MobileMode,
 	}); err != nil {
@@ -485,8 +506,9 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 	reqCtx, cancel := a.requestContext(r)
 	defer cancel()
 	var in struct {
-		ID        string `json:"id"`
-		ContextID string `json:"contextId"`
+		ID          string  `json:"id"`
+		ContextID   string  `json:"contextId"`
+		SnoozeUntil *string `json:"snoozeUntil"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
@@ -496,9 +518,20 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
 		return
 	}
+	var snoozeUntil *time.Time
+	if in.SnoozeUntil != nil {
+		parsed, parseErr := parseRFC3339Time(*in.SnoozeUntil)
+		if parseErr != nil {
+			writeAPIError(w, parseErr, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+			return
+		}
+		snoozeUntil = &parsed
+	}
+
 	resp, err := a.appService().HideItem(reqCtx, HideItemRequest{
-		ID:        in.ID,
-		ContextID: in.ContextID,
+		ID:          in.ID,
+		ContextID:   in.ContextID,
+		SnoozeUntil: snoozeUntil,
 	})
 	if err != nil {
 		writeAPIError(w, err, apiErrorPolicy{
@@ -512,6 +545,31 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(fmt.Sprintf(`{"ok":true,"hiddenCount":%d}`, resp.HiddenCount))); err != nil {
 		log.Printf("write hideItemAPI response: %v", err)
 	}
+}
+
+func parseRFC3339Time(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, errors.New("snoozeUntil must be a valid RFC3339 timestamp")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed, nil
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed, nil
+	}
+	return time.Time{}, errors.New("snoozeUntil must be a valid RFC3339 timestamp")
+}
+
+func normalizeActivityLogBody(raw string) (string, error) {
+	body := strings.TrimSpace(raw)
+	if body == "" {
+		return "", errors.New("body required")
+	}
+	if utf8.RuneCountInString(body) > activityLogMaxChars {
+		return "", fmt.Errorf("body must be <= %d characters", activityLogMaxChars)
+	}
+	return body, nil
 }
 
 func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +627,108 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(b); err != nil {
 		log.Printf("write hiddenItemsAPI response: %v", err)
+	}
+}
+
+func (a *App) resurfacedItemsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("decode resurfacedItemsAPI request: %v", err)
+	}
+	resp, err := a.appService().ResurfacedItems(reqCtx, ResurfacedItemsRequest{ContextID: in.ContextID})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	b, err := json.Marshal(map[string]any{"ok": true, "items": resp.Items})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(b); err != nil {
+		log.Printf("write resurfacedItemsAPI response: %v", err)
+	}
+}
+
+func (a *App) addActivityLogAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ItemID string `json:"itemId"`
+		Body   string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	if strings.TrimSpace(in.ItemID) == "" {
+		writeAPIError(w, errors.New("itemId required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	body, err := normalizeActivityLogBody(in.Body)
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().AppendActivityLog(reqCtx, AppendActivityLogRequest{
+		ItemID: strings.TrimSpace(in.ItemID),
+		Body:   body,
+	})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entry": resp.Entry}); err != nil {
+		log.Printf("encode addActivityLogAPI response: %v", err)
+	}
+}
+
+func (a *App) latestActivityLogAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ItemID string `json:"itemId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	if strings.TrimSpace(in.ItemID) == "" {
+		writeAPIError(w, errors.New("itemId required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().LatestActivityLog(reqCtx, LatestActivityLogRequest{
+		ItemID: strings.TrimSpace(in.ItemID),
+	})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entries": resp.Entries}); err != nil {
+		log.Printf("encode latestActivityLogAPI response: %v", err)
 	}
 }
 

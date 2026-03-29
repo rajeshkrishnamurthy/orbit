@@ -12,6 +12,66 @@ import (
 
 var errWriteTargetNotFound = errors.New("write target not found")
 
+const schemaDDL = `
+CREATE TABLE IF NOT EXISTS contexts (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  sub_note TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  color TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS items (
+  id TEXT PRIMARY KEY,
+  context_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  sub_note TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  color TEXT NOT NULL,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  slipping INTEGER NOT NULL DEFAULT 0,
+  completed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS touch_facts (
+  card_id TEXT NOT NULL,
+  local_day TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(card_id, local_day),
+  FOREIGN KEY(card_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS item_activity_logs (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  created_at_unix_ns INTEGER NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
+  CHECK (length(trim(body)) > 0),
+  CHECK (length(body) <= 140)
+);
+CREATE INDEX IF NOT EXISTS idx_item_activity_logs_item_time
+  ON item_activity_logs(item_id, created_at_unix_ns DESC, id DESC);
+CREATE TABLE IF NOT EXISTS item_snoozes (
+  item_id TEXT PRIMARY KEY,
+  wake_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS resurfaced_items (
+  item_id TEXT PRIMARY KEY,
+  context_id TEXT NOT NULL,
+  resurfaced_at TEXT NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
+  FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
+);`
+
 func writeTargetNotFoundError(action, id, contextID string) error {
 	if contextID == "" {
 		return fmt.Errorf("%s item %q: %w", action, id, errors.Join(errWriteTargetNotFound, sql.ErrNoRows))
@@ -128,57 +188,38 @@ func (s *Store) seedIfNeeded(count int, hadDB bool, initializedFlag string) erro
 }
 
 func (s *Store) ensureSchema() error {
-	_, err := s.db.Exec(`
-CREATE TABLE IF NOT EXISTS contexts (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  sub_note TEXT NOT NULL,
-  x REAL NOT NULL,
-  y REAL NOT NULL,
-  color TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS items (
-  id TEXT PRIMARY KEY,
-  context_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  sub_note TEXT NOT NULL,
-  x REAL NOT NULL,
-  y REAL NOT NULL,
-  color TEXT NOT NULL,
-  hidden INTEGER NOT NULL DEFAULT 0,
-  slipping INTEGER NOT NULL DEFAULT 0,
-  completed INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS touch_facts (
-  card_id TEXT NOT NULL,
-  local_day TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY(card_id, local_day),
-  FOREIGN KEY(card_id) REFERENCES items(id) ON DELETE CASCADE
-);`)
-	if err != nil {
+	if err := s.ensureSchemaTables(); err != nil {
+		return err
+	}
+
+	alterStmts := []struct {
+		column string
+		stmt   string
+	}{
+		{column: "context_id", stmt: `ALTER TABLE items ADD COLUMN context_id TEXT NOT NULL DEFAULT 'main-orbit'`},
+		{column: "hidden", stmt: `ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`},
+		{column: "slipping", stmt: `ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`},
+		{column: "completed", stmt: `ALTER TABLE items ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`},
+	}
+	for _, alter := range alterStmts {
+		if err := s.ensureItemsColumn(alter.column, alter.stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureSchemaTables() error {
+	if _, err := s.db.Exec(schemaDDL); err != nil {
 		return fmt.Errorf("create schema tables: %w", err)
 	}
-	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN context_id TEXT NOT NULL DEFAULT 'main-orbit'`)
+	return nil
+}
+
+func (s *Store) ensureItemsColumn(column, stmt string) error {
+	_, err := s.db.Exec(stmt)
 	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return fmt.Errorf("add items.context_id column: %w", err)
-	}
-	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return fmt.Errorf("add items.hidden column: %w", err)
-	}
-	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return fmt.Errorf("add items.slipping column: %w", err)
-	}
-	_, err = s.db.Exec(`ALTER TABLE items ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`)
-	if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-		return fmt.Errorf("add items.completed column: %w", err)
+		return fmt.Errorf("add items.%s column: %w", column, err)
 	}
 	return nil
 }

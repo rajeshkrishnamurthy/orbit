@@ -26,6 +26,7 @@
           </div>
         </div>
         <div class="system-strip__ack-row">
+          <div class="resurface-shelf" id="resurface-shelf" hidden></div>
           <div class="system-ack-stack" id="system-ack-stack" aria-live="polite" aria-atomic="true"></div>
         </div>
       </header>
@@ -42,6 +43,7 @@
     window.__MODE__ = "{{.Mode}}";
     window.__CURRENT_CONTEXT_ID__ = "{{.CurrentContextID}}";
     window.__CURRENT_CONTEXT_TITLE__ = "{{.CurrentContextTitle}}";
+    window.__RESURFACED_ITEMS__ = {{.ResurfacedItemsJSON}};
     window.__CENTER_SEMANTICS__ = {{.CenterSemanticsJSON}};
     window.__MOBILE_MODE__ = {{if .MobileMode}}true{{else}}false{{end}};
   </script>

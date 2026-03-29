@@ -7,8 +7,11 @@ void (async () => {
     {createMutationOrchestrator},
     {createPinDestructiveController},
     {createPinPresenter},
+    {createPinActivityLogController},
     {createPinTouchCompleteController},
     {createUndoAckController},
+    {createResurfaceShelfController},
+    {createHideSnoozeChoiceController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
@@ -17,18 +20,23 @@ void (async () => {
     import('/static/mutation_orchestrator.js'),
     import('/static/pin_destructive.js'),
     import('/static/pin_presenter.js'),
+    import('/static/pin_activity_log_state.js'),
     import('/static/pin_touch_complete.js'),
     import('/static/undo_ack_state.js'),
+    import('/static/resurface_shelf_state.js'),
+    import('/static/hide_snooze_choice_state.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
   const systemAckArea = document.getElementById('system-ack-stack');
+  const resurfaceShelf = document.getElementById('resurface-shelf');
   const boundaryEl = document.createElement('div');
   boundaryEl.className = 'lens-boundary';
   surface.appendChild(boundaryEl);
   const items = window.__ITEMS__ || [];
+  const resurfacedItems = window.__RESURFACED_ITEMS__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const centerSemantics = readCenterSemantics();
@@ -42,6 +50,9 @@ void (async () => {
   let hiddenTrayState = null;
   let dragDropState = null;
   let pinPresenter = null;
+  let pinActivityLogState = null;
+  let resurfaceShelfState = null;
+  let hideSnoozeChoiceState = null;
 
   function readCenterSemantics() {
     const candidates = [
@@ -223,6 +234,16 @@ void (async () => {
     syncCanvasViewportRect,
   });
 
+  if (resurfaceShelf) {
+    resurfaceShelfState = createResurfaceShelfController({
+      container: resurfaceShelf,
+      initialItems: resurfacedItems,
+      mode,
+      currentContextId,
+      getMutationTransport,
+    });
+  }
+
   dragDropState = createDragDropController({
     surface,
     mode,
@@ -287,6 +308,22 @@ void (async () => {
       handleCompleteSuccess: undoAckController.handleCompleteSuccess,
     },
   });
+  pinActivityLogState = createPinActivityLogController({
+    layoutShell,
+    mode,
+    getMutationTransport,
+    syncCanvasViewportRect,
+    showCanvasWarning,
+  });
+
+  hideSnoozeChoiceState = createHideSnoozeChoiceController({
+    layoutShell,
+    mode,
+    syncCanvasViewportRect,
+    async onChoose(pin, { snoozeUntil }) {
+      await pinDestructiveController.hidePinImmediate(pin, { snoozeUntil });
+    },
+  });
 
   const pinDomController = createPinDomController({
     surface,
@@ -303,8 +340,11 @@ void (async () => {
     },
     pinActions: {
       save: savePin,
-      hide: pinDestructiveController.hidePinImmediate,
+      hide(pin, options) {
+        hideSnoozeChoiceState.open(pin, options);
+      },
       delete: pinDestructiveController.deletePinImmediate,
+      activityLog: pinActivityLogState.open,
       touch: pinTouchCompleteController.touchPinImmediate,
       complete: pinTouchCompleteController.completePinImmediate,
       discardIfEmpty: pinDestructiveController.discardIfEmpty,
@@ -346,6 +386,11 @@ void (async () => {
 
   function closeHiddenTray(){
     hiddenTrayState.close();
+  }
+
+  function closeActivityLogPopover() {
+    if (!pinActivityLogState) return;
+    pinActivityLogState.close();
   }
 
   function renderHiddenButton(){
@@ -435,26 +480,33 @@ void (async () => {
       createPin,
       showCanvasWarning,
       showResurfaceAck,
+      onUnhideSuccess(id) {
+        if (resurfaceShelfState) resurfaceShelfState.removeItem(id);
+      },
     });
   });
 
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     if (ev.defaultPrevented) return;
-    if (!hiddenTrayState.isOpen()) return;
-    closeHiddenTray();
+    if (pinActivityLogState && pinActivityLogState.isOpen()) {
+      closeActivityLogPopover();
+      return;
+    }
+    if (hiddenTrayState.isOpen()) closeHiddenTray();
   });
 
   document.addEventListener('pointerdown', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm')) return;
+    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity')) return;
     if (target.closest('.sw')) {
       closeHiddenTray();
       return;
     }
     if (target.closest('.filters-tray')) return;
     if (surface.contains(target)) return;
+    closeActivityLogPopover();
     closeHiddenTray();
   });
 
@@ -463,7 +515,9 @@ void (async () => {
     if (!target) return;
     const outsideTrayClick = hiddenTrayState.isOpen() && !target.closest('.hidden-tray') && !target.closest('#hidden-toggle');
     if (outsideTrayClick) closeHiddenTray();
-    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm')) return;
+    const outsideActivityLog = pinActivityLogState && pinActivityLogState.isOpen() && !target.closest('.activity-log-popover') && !target.closest('.pin-activity');
+    if (outsideActivityLog) closeActivityLogPopover();
+    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm') || target.closest('.activity-log-popover')) return;
     if (outsideTrayClick) return;
     const rect = getCanvasViewportRect();
     const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
@@ -486,6 +540,11 @@ void (async () => {
     lensState.updateBoundaryCue(false);
     undoAckController.refreshAckMode();
     placeHiddenTray();
+    if (pinActivityLogState) pinActivityLogState.repositionIfOpen();
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (resurfaceShelfState) resurfaceShelfState.stop();
   });
 })().catch((err) => {
   console.error(err);

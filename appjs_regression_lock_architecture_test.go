@@ -22,7 +22,7 @@ func TestAppJSSimplificationRegressionLockRED(t *testing.T) {
 		"complete shows acknowledgment, supports undo, and expires after 6s",
 		"hide/unhide updates hidden tray count accurately",
 		"drag/drop persists card position after reload",
-		"center/periphery lens keeps canonical membership while slider only moves the cue",
+		"center/periphery lens updates membership when slider cutoff changes",
 		"mutation failure logs include structured context for context-title and pin save",
 	}
 

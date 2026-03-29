@@ -10,8 +10,11 @@ const ENDPOINTS = {
   contexts: '/api/contexts',
   items: '/api/items',
   itemsHidden: '/api/items/hidden',
+  itemsResurfaced: '/api/items/resurfaced',
   itemsHide: '/api/items/hide',
   itemsDelete: '/api/items/delete',
+  itemsActivityLogAdd: '/api/items/activity-log/add',
+  itemsActivityLogLatest: '/api/items/activity-log/latest',
   contextsDelete: '/api/contexts/delete',
   itemsComplete: '/api/items/complete',
   itemsTouch: '/api/items/touch',
@@ -101,13 +104,30 @@ export function createMutationTransport({ fetchImpl } = {}) {
       }
     },
 
+    async loadResurfacedItems({ contextId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsResurfaced, postBody({ contextId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsResurfaced, error: detail || `resurfaced load failed (${status})` };
+        }
+        const data = await response.json();
+        return { ok: true, status, endpoint: ENDPOINTS.itemsResurfaced, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsResurfaced, error: mutationErrorSummary(err) };
+      }
+    },
+
     saveModeEntity({ mode, payload }) {
       return saveEntityByEndpoint(saveEndpointForMode(mode), payload);
     },
 
-    async hideItem({ id, contextId }) {
+    async hideItem({ id, contextId, snoozeUntil }) {
       try {
-        const response = await doFetch(ENDPOINTS.itemsHide, postBody({ id, contextId }));
+        const payload = { id, contextId };
+        if (snoozeUntil) payload.snoozeUntil = snoozeUntil;
+        const response = await doFetch(ENDPOINTS.itemsHide, postBody(payload));
         const status = response.status;
         if (!response.ok) {
           const detail = await readTextSafe(response);
@@ -117,6 +137,36 @@ export function createMutationTransport({ fetchImpl } = {}) {
         return { ok: true, status, endpoint: ENDPOINTS.itemsHide, data };
       } catch (err) {
         return { ok: false, status: null, endpoint: ENDPOINTS.itemsHide, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async loadLatestActivityLog({ itemId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsActivityLogLatest, postBody({ itemId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsActivityLogLatest, error: detail || `activity log load failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.itemsActivityLogLatest, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsActivityLogLatest, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async appendActivityLog({ itemId, body }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsActivityLogAdd, postBody({ itemId, body }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsActivityLogAdd, error: detail || `activity log save failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.itemsActivityLogAdd, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsActivityLogAdd, error: mutationErrorSummary(err) };
       }
     },
 
