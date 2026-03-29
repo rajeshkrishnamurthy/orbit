@@ -28,6 +28,7 @@ export function createPinDomController({
     const hide = pin.querySelector('.pin-hide');
     const slip = pin.querySelector('.pin-slip');
     const complete = pin.querySelector('.pin-complete');
+    const activity = pin.querySelector('.pin-activity');
     const touch = pin.querySelector('.pin-touch');
     if (rightEdge) {
       rightEdge.addEventListener('pointerdown', (ev) => ev.stopPropagation());
@@ -65,6 +66,14 @@ export function createPinDomController({
         ev.preventDefault();
         ev.stopPropagation();
         pinActions.complete(pin);
+      });
+    }
+    if (activity) {
+      activity.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      activity.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        pinActions.activityLog(pin, { anchorEl: activity });
       });
     }
     if (touch) {
@@ -179,7 +188,7 @@ export function createPinDomController({
     const edgeTargets = '<span class="pin-edge pin-edge--top" aria-hidden="true"></span><span class="pin-edge pin-edge--right" aria-hidden="true"></span><span class="pin-edge pin-edge--bottom" aria-hidden="true"></span><span class="pin-edge pin-edge--left" aria-hidden="true"></span>';
     const enterBtn = mode === 'contexts' ? '<button class="pin-enter" aria-label="Enter context" title="Enter">→</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class="pin-slip" aria-label="Slipping" title="Slipping">!</button>' : '';
-    const actionDrawer = mode === 'focus' ? '<div class="pin-action-host"><span class="pin-action-affordance" aria-hidden="true">⋯</span><span class="pin-drawer-dim" aria-hidden="true"></span><div class="pin-action-drawer" role="group" aria-label="Card actions"><button class="pin-hide" aria-label="Minimize card" title="Minimize">–</button><button class="pin-delete" aria-label="Cancel card" title="Cancel">×</button><button class="pin-complete" aria-label="Complete card" title="Complete">✓</button></div></div><span class="pin-complete-smile" aria-hidden="true"></span><button class="pin-touch" aria-pressed="false" aria-label="Touch card" title="Touch card">◌</button>' : '';
+    const actionDrawer = mode === 'focus' ? '<div class="pin-action-host"><span class="pin-action-affordance" aria-hidden="true">⋯</span><span class="pin-drawer-dim" aria-hidden="true"></span><div class="pin-action-drawer" role="group" aria-label="Card actions"><button class="pin-activity" aria-label="Activity log" title="Activity log">i</button><button class="pin-hide" aria-label="Minimize card" title="Minimize">–</button><button class="pin-delete" aria-label="Cancel card" title="Cancel">×</button><button class="pin-complete" aria-label="Complete card" title="Complete">✓</button></div></div><span class="pin-complete-smile" aria-hidden="true"></span><button class="pin-touch" aria-pressed="false" aria-label="Touch card" title="Touch card">◌</button>' : '';
     const deleteBtn = mode === 'contexts' ? '<button class="pin-delete" aria-label="Delete card" title="Delete">×</button>' : '';
     pin.innerHTML = `${edgeTargets}${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class="pin-title"><input value="${escapedTitleValue(item.title)}" /></label><label class="pin-note"><textarea rows="2">${escapedNoteValue(item.subNote)}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';

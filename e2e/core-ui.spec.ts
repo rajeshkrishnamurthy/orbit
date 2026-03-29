@@ -172,6 +172,16 @@ async function openActionDrawer(pin: Locator): Promise<void> {
   await expect(pin.locator('.pin-action-drawer')).toBeVisible();
 }
 
+async function openActivityLogPopover(page: Page, pin: Locator): Promise<Locator> {
+  await openActionDrawer(pin);
+  const activityAction = pin.locator('.pin-action-drawer .pin-activity');
+  await expect(activityAction).toBeVisible();
+  await activityAction.click();
+  const popover = page.locator('.activity-log-popover');
+  await expect(popover).toBeVisible();
+  return popover;
+}
+
 async function getCanvasViewportRect(page: Page): Promise<{ left: number; top: number; right: number; bottom: number; width: number; height: number } | null> {
   return page.evaluate(() => (window as unknown as { canvasViewportRect?: { left: number; top: number; right: number; bottom: number; width: number; height: number } }).canvasViewportRect || null);
 }
@@ -1220,7 +1230,8 @@ test('focus cards use top-right hover drawer with fixed action set', async ({ pa
   await openActionDrawer(created);
 
   const drawer = created.locator('.pin-action-drawer');
-  await expect(drawer.locator('button')).toHaveCount(3);
+  await expect(drawer.locator('button')).toHaveCount(4);
+  await expect(drawer.locator('.pin-activity')).toHaveCount(1);
   await expect(drawer.locator('.pin-hide')).toHaveCount(1);
   await expect(drawer.locator('.pin-delete')).toHaveCount(1);
   await expect(drawer.locator('.pin-complete')).toHaveCount(1);
@@ -1248,6 +1259,107 @@ test('focus cards use top-right hover drawer with fixed action set', async ({ pa
   const touchCenterY = touchBox!.y + touchBox!.height / 2;
   const slipCenterY = slipBox!.y + slipBox!.height / 2;
   expect(touchCenterY).toBeCloseTo((affordanceCenterY + slipCenterY) / 2, 1);
+});
+
+test('activity log opens from overflow action with compact card-anchored popover', async ({ page }) => {
+  const created = await createCard(page, `activity-open-${Date.now()}`, 1120, 260);
+  await expect(created.locator(':scope > .pin-activity')).toHaveCount(0);
+  const popover = await openActivityLogPopover(page, created);
+  await expect(popover.locator('.activity-log-popover__header')).toHaveText('Activity log');
+  await expect(popover.locator('.activity-log-popover__entries')).toBeVisible();
+  await expect(popover.locator('.activity-log-popover__composer')).toBeVisible();
+  await expect(popover.locator('.activity-log-popover__save')).toBeVisible();
+});
+
+test('activity log composer enforces trim-aware validation and 140-char limit', async ({ page }) => {
+  const created = await createCard(page, `activity-validate-${Date.now()}`, 1120, 260);
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+  const counter = popover.locator('.activity-log-popover__counter');
+  const feedback = popover.locator('.activity-log-popover__feedback');
+
+  await expect(counter).toHaveText('0/140');
+  await expect(save).toBeDisabled();
+
+  await composer.fill('   ');
+  await expect(counter).toHaveText('3/140');
+  await expect(save).toBeDisabled();
+
+  await composer.fill('valid update');
+  await expect(counter).toHaveText('12/140');
+  await expect(save).toBeEnabled();
+
+  await composer.fill('a'.repeat(140));
+  await expect(counter).toHaveText('140/140');
+  await expect(save).toBeEnabled();
+  await expect(feedback).toBeHidden();
+
+  await composer.fill('b'.repeat(141));
+  await expect(counter).toHaveText('141/140');
+  await expect(save).toBeDisabled();
+  await expect(feedback).toContainText('140');
+});
+
+test('activity log save updates latest list and clears composer on success', async ({ page }) => {
+  const created = await createCard(page, `activity-save-${Date.now()}`, 1120, 260);
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+  const firstBody = popover.locator('.activity-log-popover__entry-body').first();
+  const firstTime = popover.locator('.activity-log-popover__entry-time').first();
+
+  await composer.fill('Client call completed');
+  await save.click();
+  await expect(firstBody).toContainText('Client call completed');
+  await expect(firstTime).toHaveText(/\S+/);
+  await expect(composer).toHaveValue('');
+  await expect(popover.locator('.activity-log-popover__counter')).toHaveText('0/140');
+  await expect(save).toBeDisabled();
+});
+
+test('activity log save failure keeps typed text for retry', async ({ page }) => {
+  const created = await createCard(page, `activity-failure-${Date.now()}`, 1120, 260);
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+  let failedOnce = false;
+
+  await page.route('**/api/items/activity-log/add', async (route, request) => {
+    if (!failedOnce && request.method() === 'POST') {
+      failedOnce = true;
+      await route.fulfill({ status: 500, body: 'activity save failed' });
+      return;
+    }
+    await route.continue();
+  });
+
+  const typed = `failed-save-${Date.now()}`;
+  await composer.fill(typed);
+  await save.click();
+  await expect(page.locator('.canvas-warning')).toContainText('Unable to save activity log. Please try again.');
+  await expect(composer).toHaveValue(typed);
+  await expect(save).toBeEnabled();
+  expect(failedOnce).toBeTruthy();
+});
+
+test('activity log popover surfaces only latest five entries in newest-first order', async ({ page }) => {
+  const created = await createCard(page, `activity-cap-${Date.now()}`, 1120, 260);
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+
+  for (let i = 1; i <= 6; i++) {
+    await composer.fill(`activity ${i}`);
+    await save.click();
+    await expect(composer).toHaveValue('');
+  }
+
+  const bodies = popover.locator('.activity-log-popover__entry-body');
+  await expect(bodies).toHaveCount(5);
+  await expect(bodies.nth(0)).toHaveText('activity 6');
+  await expect(bodies.nth(4)).toHaveText('activity 2');
+  await expect(popover.locator('.activity-log-popover__entries')).not.toContainText('activity 1');
 });
 
 test('touch control stays explicit, toggles today state, and supports undo', async ({ page }) => {
