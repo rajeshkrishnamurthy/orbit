@@ -69,31 +69,55 @@ export function createLensStateController({
   }
 
   function center() {
-    if (semanticContract) {
-      return { x: semanticContract.centerX, y: semanticContract.centerY };
-    }
-    return { x: surface.clientWidth / 2, y: surface.clientHeight / 2 };
+    const geometry = resolveSurfaceGeometry();
+    return { x: geometry.centerX, y: geometry.centerY };
   }
 
   function maxR() {
-    if (semanticContract) return semanticContract.maxRadius;
-    return Math.min(surface.clientWidth, surface.clientHeight) * 0.42;
+    return resolveSurfaceGeometry().maxRadius;
+  }
+
+  function resolveSurfaceGeometry() {
+    const surfaceWidth = surface.clientWidth || (semanticContract ? semanticContract.width : 0);
+    const surfaceHeight = surface.clientHeight || (semanticContract ? semanticContract.height : 0);
+    if (!(surfaceWidth > 0) || !(surfaceHeight > 0)) {
+      return {
+        centerX: 0,
+        centerY: 0,
+        maxRadius: 0,
+      };
+    }
+    if (!semanticContract) {
+      return {
+        centerX: surfaceWidth / 2,
+        centerY: surfaceHeight / 2,
+        maxRadius: Math.min(surfaceWidth, surfaceHeight) * 0.42,
+      };
+    }
+    const scaleX = surfaceWidth / semanticContract.width;
+    const scaleY = surfaceHeight / semanticContract.height;
+    const radiusScale = Math.min(scaleX, scaleY);
+    return {
+      centerX: semanticContract.centerX * scaleX,
+      centerY: semanticContract.centerY * scaleY,
+      maxRadius: semanticContract.maxRadius * radiusScale,
+    };
   }
 
   function proximityFactor(distance) {
-    const normalized = Math.min(1, distance / maxR());
+    const radius = maxR();
+    if (!(radius > 0)) return 0;
+    const normalized = Math.min(1, distance / radius);
     return 1 - normalized;
   }
 
   function pinDistanceFromCenter(pin) {
-    const x = parseFloat(pin.style.left) || 0;
-    const y = parseFloat(pin.style.top) || 0;
-    if (semanticContract) {
-      return Math.hypot(x - semanticContract.centerX, y - semanticContract.centerY);
-    }
     const width = pin.offsetWidth || 180;
     const height = pin.offsetHeight || 72;
-    return Math.hypot((x + width / 2) - center().x, (y + height / 2) - center().y);
+    const x = (parseFloat(pin.style.left) || 0) + width / 2;
+    const y = (parseFloat(pin.style.top) || 0) + height / 2;
+    const c = center();
+    return Math.hypot(x - c.x, y - c.y);
   }
 
   function readStaleLensSnapshot() {
@@ -161,7 +185,7 @@ export function createLensStateController({
   function inLens(pin) {
     if (lens === 'all') return true;
     const distance = pinDistanceFromCenter(pin);
-    const cutoff = maxR() * (semanticContract ? canonicalLensRatio : lensRatio);
+    const cutoff = maxR() * lensRatio;
     if (lens === 'center') return distance <= cutoff;
     return distance > cutoff;
   }
@@ -203,7 +227,7 @@ export function createLensStateController({
 
   function applyDistanceStyle(pin) {
     const distance = pinDistanceFromCenter(pin);
-    const cutoff = maxR() * (semanticContract ? canonicalLensRatio : lensRatio);
+    const cutoff = maxR() * lensRatio;
     const isCenterBand = distance <= cutoff;
     const proximity = proximityFactor(distance);
 
