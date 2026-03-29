@@ -13,6 +13,7 @@ export function createHiddenTrayController({
   let hiddenItemsCache = [];
   const pendingUnhide = new Map();
   let hiddenDragPreview = null;
+  let trayRefreshIntervalID = null;
 
   const hiddenBtn = document.createElement('button');
   hiddenBtn.className = 'hidden-toggle';
@@ -61,6 +62,7 @@ export function createHiddenTrayController({
 
   function close() {
     clearHiddenDragPreview();
+    stopTrayRefresh();
     hiddenTray.hidden = true;
     hiddenTray.innerHTML = '';
     trayOpen = false;
@@ -73,15 +75,21 @@ export function createHiddenTrayController({
       hiddenTray.innerHTML = '<div class="hidden-tray-empty">No hidden cards</div>';
       return;
     }
+    const msPerHour = 60 * 60 * 1000;
     const msPerDay = 24 * 60 * 60 * 1000;
-    const snoozeDaysLeftFor = (item) => {
+    const snoozeLabelFor = (item) => {
       const rawWakeAt = item && typeof item.snoozeWakeAt === 'string' ? item.snoozeWakeAt : '';
       if (!rawWakeAt) return null;
       const wakeAtMs = Date.parse(rawWakeAt);
       if (!Number.isFinite(wakeAtMs)) return null;
       const remainingMs = wakeAtMs - Date.now();
       if (remainingMs <= 0) return null;
-      return Math.max(1, Math.ceil(remainingMs / msPerDay));
+      if (remainingMs < msPerDay) {
+        const hoursLeft = Math.max(1, Math.ceil(remainingMs / msPerHour));
+        return `${hoursLeft}h left`;
+      }
+      const daysLeft = Math.max(1, Math.ceil(remainingMs / msPerDay));
+      return `${daysLeft}d left`;
     };
     hiddenItemsCache.forEach((item) => {
       const trayItem = document.createElement('div');
@@ -91,11 +99,11 @@ export function createHiddenTrayController({
       title.className = 'hidden-tray-item__title';
       title.textContent = item.title || 'Untitled';
       trayItem.appendChild(title);
-      const snoozeDaysLeft = snoozeDaysLeftFor(item);
-      if (snoozeDaysLeft !== null) {
+      const snoozeLabel = snoozeLabelFor(item);
+      if (snoozeLabel !== null) {
         const snooze = document.createElement('span');
         snooze.className = 'hidden-tray-item__snooze';
-        snooze.textContent = `${snoozeDaysLeft}d left`;
+        snooze.textContent = snoozeLabel;
         trayItem.appendChild(snooze);
       }
       trayItem.draggable = true;
@@ -110,6 +118,21 @@ export function createHiddenTrayController({
     });
   }
 
+  function stopTrayRefresh() {
+    if (trayRefreshIntervalID == null) return;
+    window.clearInterval(trayRefreshIntervalID);
+    trayRefreshIntervalID = null;
+  }
+
+  function startTrayRefresh() {
+    if (!trayOpen) return;
+    if (trayRefreshIntervalID != null) return;
+    trayRefreshIntervalID = window.setInterval(() => {
+      if (!trayOpen) return;
+      renderHiddenTrayItems();
+    }, 60 * 60 * 1000);
+  }
+
   function syncTray() {
     if (!trayOpen) return;
     renderHiddenTrayItems();
@@ -117,6 +140,7 @@ export function createHiddenTrayController({
 
   async function open() {
     trayOpen = true;
+    startTrayRefresh();
     hiddenTray.hidden = false;
     placeHiddenTray();
     hiddenTray.innerHTML = '<div class="hidden-tray-empty">Loading…</div>';
