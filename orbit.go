@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite" // Registers the SQLite driver with database/sql.
 )
@@ -56,6 +57,13 @@ type Context struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+type ActivityLogEntry struct {
+	ID        string    `json:"id"`
+	ItemID    string    `json:"itemId"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
 type Store struct {
 	db *sql.DB
 }
@@ -67,6 +75,7 @@ type App struct {
 }
 
 const requestTimeout = 5 * time.Second
+const activityLogMaxChars = 140
 
 func (a *App) appService() *AppService {
 	if a.service == nil {
@@ -131,6 +140,8 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
 	mux.HandleFunc("/api/items/unhide-at", app.unhideAtAPI)
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
+	mux.HandleFunc("/api/items/activity-log/add", app.addActivityLogAPI)
+	mux.HandleFunc("/api/items/activity-log/latest", app.latestActivityLogAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
 	return mux, nil
@@ -514,6 +525,17 @@ func (a *App) hideItemAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func normalizeActivityLogBody(raw string) (string, error) {
+	body := strings.TrimSpace(raw)
+	if body == "" {
+		return "", errors.New("body required")
+	}
+	if utf8.RuneCountInString(body) > activityLogMaxChars {
+		return "", fmt.Errorf("body must be <= %d characters", activityLogMaxChars)
+	}
+	return body, nil
+}
+
 func (a *App) revealAllAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -569,6 +591,79 @@ func (a *App) hiddenItemsAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(b); err != nil {
 		log.Printf("write hiddenItemsAPI response: %v", err)
+	}
+}
+
+func (a *App) addActivityLogAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ItemID string `json:"itemId"`
+		Body   string `json:"body"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	if strings.TrimSpace(in.ItemID) == "" {
+		writeAPIError(w, errors.New("itemId required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	body, err := normalizeActivityLogBody(in.Body)
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().AppendActivityLog(reqCtx, AppendActivityLogRequest{
+		ItemID: strings.TrimSpace(in.ItemID),
+		Body:   body,
+	})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{
+			notFoundErr:     errWriteTargetNotFound,
+			notFoundMessage: "item not found",
+			defaultStatus:   http.StatusInternalServerError,
+		})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entry": resp.Entry}); err != nil {
+		log.Printf("encode addActivityLogAPI response: %v", err)
+	}
+}
+
+func (a *App) latestActivityLogAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ItemID string `json:"itemId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	if strings.TrimSpace(in.ItemID) == "" {
+		writeAPIError(w, errors.New("itemId required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().LatestActivityLog(reqCtx, LatestActivityLogRequest{
+		ItemID: strings.TrimSpace(in.ItemID),
+	})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entries": resp.Entries}); err != nil {
+		log.Printf("encode latestActivityLogAPI response: %v", err)
 	}
 }
 

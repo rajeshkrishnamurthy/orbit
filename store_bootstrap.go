@@ -160,7 +160,19 @@ CREATE TABLE IF NOT EXISTS touch_facts (
   created_at TEXT NOT NULL,
   PRIMARY KEY(card_id, local_day),
   FOREIGN KEY(card_id) REFERENCES items(id) ON DELETE CASCADE
-);`)
+);
+CREATE TABLE IF NOT EXISTS item_activity_logs (
+  id TEXT PRIMARY KEY,
+  item_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  created_at_unix_ns INTEGER NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
+  CHECK (length(trim(body)) > 0),
+  CHECK (length(body) <= 140)
+);
+CREATE INDEX IF NOT EXISTS idx_item_activity_logs_item_time
+  ON item_activity_logs(item_id, created_at_unix_ns DESC, id DESC);`)
 	if err != nil {
 		return fmt.Errorf("create schema tables: %w", err)
 	}

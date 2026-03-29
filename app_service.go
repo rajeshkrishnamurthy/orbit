@@ -200,6 +200,39 @@ func (s *AppService) HiddenItems(ctx context.Context, req HiddenItemsRequest) (H
 	return HiddenItemsResponse{Items: items}, nil
 }
 
+type AppendActivityLogRequest struct {
+	ItemID string
+	Body   string
+}
+
+type AppendActivityLogResponse struct {
+	Entry ActivityLogEntry
+}
+
+func (s *AppService) AppendActivityLog(ctx context.Context, req AppendActivityLogRequest) (AppendActivityLogResponse, error) {
+	entry, err := s.store.appendActivityLogWithContext(ctx, req.ItemID, req.Body, time.Now())
+	if err != nil {
+		return AppendActivityLogResponse{}, err
+	}
+	return AppendActivityLogResponse{Entry: entry}, nil
+}
+
+type LatestActivityLogRequest struct {
+	ItemID string
+}
+
+type LatestActivityLogResponse struct {
+	Entries []ActivityLogEntry
+}
+
+func (s *AppService) LatestActivityLog(ctx context.Context, req LatestActivityLogRequest) (LatestActivityLogResponse, error) {
+	entries, err := s.store.latestActivityLogWithContext(ctx, req.ItemID, 5)
+	if err != nil {
+		return LatestActivityLogResponse{}, err
+	}
+	return LatestActivityLogResponse{Entries: entries}, nil
+}
+
 type UnhideAtRequest struct {
 	ID        string
 	ContextID string
