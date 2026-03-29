@@ -29,9 +29,7 @@ func (s *Store) hideWithContextAndSnooze(ctx context.Context, id, contextID stri
 		return err
 	}
 	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
+		rollbackTx(tx)
 	}()
 
 	now := time.Now().Format(time.RFC3339Nano)
@@ -69,6 +67,16 @@ ON CONFLICT(item_id) DO UPDATE SET wake_at=excluded.wake_at, updated_at=excluded
 	return nil
 }
 
+func rollbackTx(tx *sql.Tx) {
+	if tx == nil {
+		return
+	}
+	err := tx.Rollback()
+	if err == nil || errors.Is(err, sql.ErrTxDone) {
+		return
+	}
+}
+
 func (s *Store) clearSnoozeAndResurfacedForItemWithContext(ctx context.Context, id string) error {
 	if _, err := s.execContext(ctx, `DELETE FROM item_snoozes WHERE item_id = ?`, id); err != nil {
 		return fmt.Errorf("clear snooze for item %q: %w", id, err)
@@ -79,29 +87,13 @@ func (s *Store) clearSnoozeAndResurfacedForItemWithContext(ctx context.Context, 
 	return nil
 }
 
-func (s *Store) clearSnoozeAndResurfacedForContextWithContext(ctx context.Context, contextID string) error {
-	id := contextOrDefault(contextID)
-	if _, err := s.execContext(ctx, `
-DELETE FROM item_snoozes
-WHERE item_id IN (SELECT id FROM items WHERE context_id = ?)
-`, id); err != nil {
-		return fmt.Errorf("clear snoozes for context %q: %w", id, err)
-	}
-	if _, err := s.execContext(ctx, `DELETE FROM resurfaced_items WHERE context_id = ?`, id); err != nil {
-		return fmt.Errorf("clear resurfaced items for context %q: %w", id, err)
-	}
-	return nil
-}
-
 func (s *Store) markExpiredSnoozesResurfacedWithContext(ctx context.Context, now time.Time) error {
 	tx, err := s.beginTxContext(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if tx != nil {
-			_ = tx.Rollback()
-		}
+		rollbackTx(tx)
 	}()
 
 	nowValue := formatWakeAt(now)

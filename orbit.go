@@ -250,7 +250,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	var (
 		itemsJSONBytes []byte
 		itemsJSON      template.JS
-		resurfacedJSON template.JS = template.JS("[]")
+		resurfacedJSON = template.JS("[]")
 	)
 	if resp.Mode == "contexts" {
 		itemsJSONBytes, err = json.Marshal(resp.Contexts)

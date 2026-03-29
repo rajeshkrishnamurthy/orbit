@@ -59,8 +59,8 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
-	if err := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); err != nil {
-		return HomeResponse{}, err
+	if markErr := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); markErr != nil {
+		return HomeResponse{}, markErr
 	}
 	resurfacedItems, err := s.store.resurfacedItemsForContextWithContext(ctx, ctxID)
 	if err != nil {
