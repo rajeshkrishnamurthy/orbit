@@ -110,14 +110,7 @@ func (s *Store) hide(id, contextID string) error {
 }
 
 func (s *Store) hideWithContext(ctx context.Context, id, contextID string) error {
-	result, err := s.execContext(ctx, `UPDATE items SET hidden=1, updated_at=? WHERE id = ? AND context_id = ?`, time.Now().Format(time.RFC3339Nano), id, contextOrDefault(contextID))
-	if err != nil {
-		return fmt.Errorf("hide item %q in context %q: %w", id, contextOrDefault(contextID), err)
-	}
-	if err := requireRowsAffected(result, fmt.Sprintf("hide item %q in context %q", id, contextOrDefault(contextID)), writeTargetNotFoundError("hide", id, contextID)); err != nil {
-		return err
-	}
-	return nil
+	return s.hideWithContextAndSnooze(ctx, id, contextID, nil)
 }
 
 func (s *Store) hiddenCountWithContext(ctx context.Context, contextID string) (int, error) {
@@ -134,7 +127,17 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 }
 
 func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([]Item, error) {
-	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, queryErr := s.queryContext(ctx, `
+SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.created_at,i.updated_at,s.wake_at
+FROM items i
+LEFT JOIN item_snoozes s ON s.item_id = i.id
+WHERE i.hidden=1 AND i.completed=0 AND i.context_id=?
+ORDER BY
+  CASE WHEN s.wake_at IS NULL THEN 1 ELSE 0 END ASC,
+  s.wake_at ASC,
+  i.updated_at DESC,
+  i.id ASC
+`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query hidden items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -145,7 +148,8 @@ func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([
 		var it Item
 		var created string
 		var updated string
-		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+		var wakeAt sql.NullString
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated, &wakeAt); scanErr != nil {
 			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
 		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
@@ -155,6 +159,13 @@ func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([
 		createdByID[it.ID] = createdDay
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
+		}
+		if wakeAt.Valid {
+			parsedWakeAt, parseErr := parseWakeAt(wakeAt.String)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			it.SnoozeWakeAt = &parsedWakeAt
 		}
 		out = append(out, it)
 	}
@@ -186,6 +197,9 @@ func (s *Store) unhideAtWithContext(ctx context.Context, id, contextID string, x
 		return fmt.Errorf("unhide item %q in context %q: %w", id, contextOrDefault(contextID), err)
 	}
 	if err := requireRowsAffected(result, fmt.Sprintf("unhide item %q in context %q", id, contextOrDefault(contextID)), writeTargetNotFoundError("unhide", id, contextID)); err != nil {
+		return err
+	}
+	if err := s.clearSnoozeAndResurfacedForItemWithContext(ctx, id); err != nil {
 		return err
 	}
 	return nil

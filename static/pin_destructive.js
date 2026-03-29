@@ -14,13 +14,18 @@ export function createPinDestructiveController({runtime, effects}) {
     handleDiscardRemove,
   } = effects;
 
-  async function hidePinImmediate(pin) {
+  async function hidePinImmediate(pin, { snoozeUntil } = {}) {
     if (pin.dataset.hidePending === 'true') return;
     cancelPendingSave(pin.dataset.id);
     pin.dataset.hidePending = 'true';
     try {
       const transport = await getTransport();
-      const result = await transport.hideItem({id: pin.dataset.id, contextId: currentContextId});
+      let result;
+      if (snoozeUntil) {
+        result = await transport.hideItem({id: pin.dataset.id, contextId: currentContextId, snoozeUntil});
+      } else {
+        result = await transport.hideItem({id: pin.dataset.id, contextId: currentContextId});
+      }
       if (!result.ok) {
         transport.logMutationFailure({
           operation: 'hide-pin',

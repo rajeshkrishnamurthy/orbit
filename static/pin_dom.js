@@ -57,7 +57,7 @@ export function createPinDomController({
         ev.preventDefault();
         ev.stopPropagation();
         if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
-        pinActions.hide(pin);
+        pinActions.hide(pin, { anchorEl: hide });
       });
     }
     if (complete) {

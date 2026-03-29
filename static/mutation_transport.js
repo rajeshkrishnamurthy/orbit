@@ -10,6 +10,7 @@ const ENDPOINTS = {
   contexts: '/api/contexts',
   items: '/api/items',
   itemsHidden: '/api/items/hidden',
+  itemsResurfaced: '/api/items/resurfaced',
   itemsHide: '/api/items/hide',
   itemsDelete: '/api/items/delete',
   itemsActivityLogAdd: '/api/items/activity-log/add',
@@ -103,13 +104,30 @@ export function createMutationTransport({ fetchImpl } = {}) {
       }
     },
 
+    async loadResurfacedItems({ contextId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsResurfaced, postBody({ contextId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsResurfaced, error: detail || `resurfaced load failed (${status})` };
+        }
+        const data = await response.json();
+        return { ok: true, status, endpoint: ENDPOINTS.itemsResurfaced, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsResurfaced, error: mutationErrorSummary(err) };
+      }
+    },
+
     saveModeEntity({ mode, payload }) {
       return saveEntityByEndpoint(saveEndpointForMode(mode), payload);
     },
 
-    async hideItem({ id, contextId }) {
+    async hideItem({ id, contextId, snoozeUntil }) {
       try {
-        const response = await doFetch(ENDPOINTS.itemsHide, postBody({ id, contextId }));
+        const payload = { id, contextId };
+        if (snoozeUntil) payload.snoozeUntil = snoozeUntil;
+        const response = await doFetch(ENDPOINTS.itemsHide, postBody(payload));
         const status = response.status;
         if (!response.ok) {
           const detail = await readTextSafe(response);

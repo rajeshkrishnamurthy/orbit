@@ -172,7 +172,21 @@ CREATE TABLE IF NOT EXISTS item_activity_logs (
   CHECK (length(body) <= 140)
 );
 CREATE INDEX IF NOT EXISTS idx_item_activity_logs_item_time
-  ON item_activity_logs(item_id, created_at_unix_ns DESC, id DESC);`)
+  ON item_activity_logs(item_id, created_at_unix_ns DESC, id DESC);
+CREATE TABLE IF NOT EXISTS item_snoozes (
+  item_id TEXT PRIMARY KEY,
+  wake_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS resurfaced_items (
+  item_id TEXT PRIMARY KEY,
+  context_id TEXT NOT NULL,
+  resurfaced_at TEXT NOT NULL,
+  FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE,
+  FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
+);`)
 	if err != nil {
 		return fmt.Errorf("create schema tables: %w", err)
 	}

@@ -25,6 +25,7 @@ type HomeRequest struct {
 
 type HomeResponse struct {
 	Items               []Item
+	ResurfacedItems     []Item
 	Contexts            []Context
 	HiddenCount         int
 	Mode                string
@@ -58,12 +59,20 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
+	if err := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); err != nil {
+		return HomeResponse{}, err
+	}
+	resurfacedItems, err := s.store.resurfacedItemsForContextWithContext(ctx, ctxID)
+	if err != nil {
+		return HomeResponse{}, err
+	}
 	hiddenN, err := s.store.hiddenCountWithContext(ctx, ctxID)
 	if err != nil {
 		return HomeResponse{}, err
 	}
 	return HomeResponse{
 		Items:               items,
+		ResurfacedItems:     resurfacedItems,
 		HiddenCount:         hiddenN,
 		Mode:                "focus",
 		CurrentContextID:    cur.ID,
@@ -147,8 +156,9 @@ func (s *AppService) UndoTouchItem(ctx context.Context, req UndoTouchItemRequest
 }
 
 type HideItemRequest struct {
-	ID        string
-	ContextID string
+	ID          string
+	ContextID   string
+	SnoozeUntil *time.Time
 }
 
 type HideItemResponse struct {
@@ -156,7 +166,7 @@ type HideItemResponse struct {
 }
 
 func (s *AppService) HideItem(ctx context.Context, req HideItemRequest) (HideItemResponse, error) {
-	if err := s.store.hideWithContext(ctx, req.ID, req.ContextID); err != nil {
+	if err := s.store.hideWithContextAndSnooze(ctx, req.ID, req.ContextID, req.SnoozeUntil); err != nil {
 		return HideItemResponse{}, err
 	}
 	hiddenN := 0
@@ -198,6 +208,25 @@ func (s *AppService) HiddenItems(ctx context.Context, req HiddenItemsRequest) (H
 		return HiddenItemsResponse{}, err
 	}
 	return HiddenItemsResponse{Items: items}, nil
+}
+
+type ResurfacedItemsRequest struct {
+	ContextID string
+}
+
+type ResurfacedItemsResponse struct {
+	Items []Item
+}
+
+func (s *AppService) ResurfacedItems(ctx context.Context, req ResurfacedItemsRequest) (ResurfacedItemsResponse, error) {
+	if err := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); err != nil {
+		return ResurfacedItemsResponse{}, err
+	}
+	items, err := s.store.resurfacedItemsForContextWithContext(ctx, req.ContextID)
+	if err != nil {
+		return ResurfacedItemsResponse{}, err
+	}
+	return ResurfacedItemsResponse{Items: items}, nil
 }
 
 type AppendActivityLogRequest struct {

@@ -2,6 +2,7 @@ package orbit
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1138,7 +1139,263 @@ func TestLatestActivityLogAPIReturnsNewestFiveAndRetentionPersists(t *testing.T)
 		t.Fatalf("expected retained history count=7, got %d", retainedCount)
 	}
 }
+func TestHiddenItemsAPIReturnsSnoozeWakeAtForSnoozedItemsOnly(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
 
+	ctxID := "t_ctx_hidden_snooze_1"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Hidden Snooze Context",
+		SubNote: "",
+		X:       420,
+		Y:       260,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+
+	snoozedID := "t_hidden_snoozed_item"
+	skippedID := "t_hidden_skip_item"
+	if err := s.update(Item{ID: snoozedID, ContextID: ctxID, Title: "snoozed", SubNote: "", X: 140, Y: 140, Color: "var(--c3)"}); err != nil {
+		t.Fatalf("seed snoozed hidden item: %v", err)
+	}
+	if err := s.update(Item{ID: skippedID, ContextID: ctxID, Title: "skip", SubNote: "", X: 180, Y: 180, Color: "var(--c4)"}); err != nil {
+		t.Fatalf("seed skipped hidden item: %v", err)
+	}
+
+	expectedWakeAt := time.Now().Add(50 * time.Hour).UTC().Truncate(time.Millisecond)
+	if err := s.hideWithContextAndSnooze(context.Background(), snoozedID, ctxID, &expectedWakeAt); err != nil {
+		t.Fatalf("hide snoozed item: %v", err)
+	}
+	if err := s.hide(skippedID, ctxID); err != nil {
+		t.Fatalf("hide skipped item: %v", err)
+	}
+
+	rr := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			ID           string  `json:"id"`
+			SnoozeWakeAt *string `json:"snoozeWakeAt"`
+		} `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+
+	itemsByID := make(map[string]*string, len(resp.Items))
+	for i := range resp.Items {
+		itemsByID[resp.Items[i].ID] = resp.Items[i].SnoozeWakeAt
+	}
+	snoozedWakeAt := itemsByID[snoozedID]
+	if snoozedWakeAt == nil {
+		t.Fatalf("expected snoozeWakeAt for item %q", snoozedID)
+	}
+	if *snoozedWakeAt != formatWakeAt(expectedWakeAt) {
+		t.Fatalf("unexpected snoozeWakeAt: got %q want %q", *snoozedWakeAt, formatWakeAt(expectedWakeAt))
+	}
+	if got := itemsByID[skippedID]; got != nil {
+		t.Fatalf("expected no snoozeWakeAt for skip-snooze item %q, got %q", skippedID, *got)
+	}
+}
+
+func TestHiddenItemsAPIOrdersSnoozedByWakeAtAndSkipLast(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_order_wake_1"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Hidden Order Wake Context",
+		SubNote: "",
+		X:       430,
+		Y:       260,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+
+	oneDayID := "t_hidden_order_1d"
+	threeDayID := "t_hidden_order_3d"
+	sevenDayID := "t_hidden_order_7d"
+	skippedID := "t_hidden_order_skip"
+	seedIDs := []string{oneDayID, threeDayID, sevenDayID, skippedID}
+	for _, id := range seedIDs {
+		if err := s.update(Item{ID: id, ContextID: ctxID, Title: id, SubNote: "", X: 160, Y: 160, Color: "var(--c3)"}); err != nil {
+			t.Fatalf("seed hidden item %q: %v", id, err)
+		}
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	if err := s.hideWithContextAndSnooze(context.Background(), sevenDayID, ctxID, ptrTime(now.Add(7*24*time.Hour))); err != nil {
+		t.Fatalf("hide 7d item: %v", err)
+	}
+	if err := s.hide(skippedID, ctxID); err != nil {
+		t.Fatalf("hide skipped item: %v", err)
+	}
+	if err := s.hideWithContextAndSnooze(context.Background(), oneDayID, ctxID, ptrTime(now.Add(24*time.Hour))); err != nil {
+		t.Fatalf("hide 1d item: %v", err)
+	}
+	if err := s.hideWithContextAndSnooze(context.Background(), threeDayID, ctxID, ptrTime(now.Add(72*time.Hour))); err != nil {
+		t.Fatalf("hide 3d item: %v", err)
+	}
+
+	rr := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if len(resp.Items) != len(seedIDs) {
+		t.Fatalf("expected %d hidden items, got %d", len(seedIDs), len(resp.Items))
+	}
+
+	gotOrder := make([]string, 0, len(resp.Items))
+	for i := range resp.Items {
+		gotOrder = append(gotOrder, resp.Items[i].ID)
+	}
+	wantOrder := []string{oneDayID, threeDayID, sevenDayID, skippedID}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Fatalf("hidden ordering mismatch at index %d: got=%v want=%v", i, gotOrder, wantOrder)
+		}
+	}
+}
+
+func TestHiddenItemsAPIOrderingTieBreaksByUpdatedAtDesc(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_order_updated_tie_1"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Hidden Order Updated Tie Context",
+		SubNote: "",
+		X:       430,
+		Y:       260,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+
+	olderID := "t_hidden_order_updated_old"
+	newerID := "t_hidden_order_updated_new"
+	for _, id := range []string{olderID, newerID} {
+		if err := s.update(Item{ID: id, ContextID: ctxID, Title: id, SubNote: "", X: 170, Y: 170, Color: "var(--c4)"}); err != nil {
+			t.Fatalf("seed hidden item %q: %v", id, err)
+		}
+	}
+
+	wake := time.Now().UTC().Truncate(time.Millisecond).Add(72 * time.Hour)
+	if err := s.hideWithContextAndSnooze(context.Background(), olderID, ctxID, &wake); err != nil {
+		t.Fatalf("hide older item: %v", err)
+	}
+	if err := s.hideWithContextAndSnooze(context.Background(), newerID, ctxID, &wake); err != nil {
+		t.Fatalf("hide newer item: %v", err)
+	}
+
+	olderUpdated := wake.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	newerUpdated := wake.Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE items SET updated_at=? WHERE id=?`, olderUpdated, olderID); err != nil {
+		t.Fatalf("set older updated_at: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE items SET updated_at=? WHERE id=?`, newerUpdated, newerID); err != nil {
+		t.Fatalf("set newer updated_at: %v", err)
+	}
+
+	rr := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 hidden items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ID != newerID || resp.Items[1].ID != olderID {
+		t.Fatalf("expected updated_at desc ordering, got [%s, %s]", resp.Items[0].ID, resp.Items[1].ID)
+	}
+}
+
+func TestHiddenItemsAPIOrderingFinalTieBreaksByIDAsc(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxID := "t_ctx_hidden_order_id_tie_1"
+	if err := s.upsertContext(Context{
+		ID:      ctxID,
+		Title:   "Hidden Order ID Tie Context",
+		SubNote: "",
+		X:       430,
+		Y:       260,
+		Color:   "var(--c2)",
+	}); err != nil {
+		t.Fatalf("upsertContext: %v", err)
+	}
+
+	alphaID := "t_hidden_order_id_alpha"
+	zetaID := "t_hidden_order_id_zeta"
+	for _, id := range []string{zetaID, alphaID} {
+		if err := s.update(Item{ID: id, ContextID: ctxID, Title: id, SubNote: "", X: 180, Y: 180, Color: "var(--c5)"}); err != nil {
+			t.Fatalf("seed hidden item %q: %v", id, err)
+		}
+	}
+
+	wake := time.Now().UTC().Truncate(time.Millisecond).Add(72 * time.Hour)
+	if err := s.hideWithContextAndSnooze(context.Background(), zetaID, ctxID, &wake); err != nil {
+		t.Fatalf("hide zeta item: %v", err)
+	}
+	if err := s.hideWithContextAndSnooze(context.Background(), alphaID, ctxID, &wake); err != nil {
+		t.Fatalf("hide alpha item: %v", err)
+	}
+
+	sameUpdated := wake.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`UPDATE items SET updated_at=? WHERE id IN (?, ?)`, sameUpdated, alphaID, zetaID); err != nil {
+		t.Fatalf("set same updated_at: %v", err)
+	}
+
+	rr := postJSON(t, app.hiddenItemsAPI, map[string]any{"contextId": ctxID})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	resp := mustDecodeJSON[struct {
+		OK    bool `json:"ok"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true, got false")
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 hidden items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].ID != alphaID || resp.Items[1].ID != zetaID {
+		t.Fatalf("expected final id ASC tie-break ordering, got [%s, %s]", resp.Items[0].ID, resp.Items[1].ID)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
+}
 func TestStoreSnapshotAndContextsReadPaths(t *testing.T) {
 	s, _ := newTestStore(t)
 
