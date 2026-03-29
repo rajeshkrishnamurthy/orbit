@@ -210,6 +210,13 @@ function ageCardInDb(id: string, daysAgo: number): void {
   execFileSync('sqlite3', [sqliteDbPath(), sql], { stdio: 'pipe' });
 }
 
+function activityLogCountInDb(itemID: string): number {
+  const sql = `SELECT COUNT(*) FROM item_activity_logs WHERE item_id=${sqlLiteral(itemID)};`;
+  const out = execFileSync('sqlite3', [sqliteDbPath(), sql], { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+  const count = Number(out);
+  return Number.isFinite(count) ? count : Number.NaN;
+}
+
 function collectMutationFailureLogs(page: Page): { logs: string[]; stop: () => void } {
   const logs: string[] = [];
   const onConsole = (msg: ConsoleMessage): void => {
@@ -1360,6 +1367,57 @@ test('activity log popover surfaces only latest five entries in newest-first ord
   await expect(bodies.nth(0)).toHaveText('activity 6');
   await expect(bodies.nth(4)).toHaveText('activity 2');
   await expect(popover.locator('.activity-log-popover__entries')).not.toContainText('activity 1');
+});
+
+test('activity log empty state stays memory-bump focused and omits notes-style controls', async ({ page }) => {
+  const created = await createCard(page, `activity-empty-${Date.now()}`, 1120, 260);
+  await expect(created.locator(':scope > .pin-activity')).toHaveCount(0);
+  const popover = await openActivityLogPopover(page, created);
+  await expect(popover.locator('.activity-log-popover__empty')).toContainText('future-you');
+  await expect(popover).not.toContainText(/edit/i);
+  await expect(popover).not.toContainText(/search/i);
+  await expect(popover).not.toContainText(/history/i);
+});
+
+test('activity log allows 140-char save with timestamp and persists after popover reopen', async ({ page }) => {
+  const created = await createCard(page, `activity-140-${Date.now()}`, 1120, 260);
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+  const text140 = 'z'.repeat(140);
+
+  await composer.fill(text140);
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(popover.locator('.activity-log-popover__entry-body').first()).toHaveText(text140);
+  await expect(popover.locator('.activity-log-popover__entry-time').first()).toHaveText(/\S+/);
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.activity-log-popover')).toBeHidden();
+
+  const reopened = await openActivityLogPopover(page, created);
+  await expect(reopened.locator('.activity-log-popover__entry-body').first()).toHaveText(text140);
+});
+
+test('activity log keeps retained history in storage while UI remains capped at five', async ({ page }) => {
+  const created = await createCard(page, `activity-retain-${Date.now()}`, 1120, 260);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+  const popover = await openActivityLogPopover(page, created);
+  const composer = popover.locator('.activity-log-popover__composer');
+  const save = popover.locator('.activity-log-popover__save');
+
+  for (let i = 1; i <= 7; i++) {
+    await composer.fill(`retained ${i}`);
+    await save.click();
+    await expect(composer).toHaveValue('');
+  }
+
+  const bodies = popover.locator('.activity-log-popover__entry-body');
+  await expect(bodies).toHaveCount(5);
+  await expect(bodies.nth(0)).toHaveText('retained 7');
+  await expect(bodies.nth(4)).toHaveText('retained 3');
+  expect(activityLogCountInDb(id!)).toBe(7);
 });
 
 test('touch control stays explicit, toggles today state, and supports undo', async ({ page }) => {
