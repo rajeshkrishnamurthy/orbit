@@ -81,10 +81,24 @@ export function createHideSnoozeChoiceController({
       moveSelection(1);
       return;
     }
-    if (event.key === 'Enter' || event.key === 'Escape') {
+    if (event.key === 'Enter') {
       event.preventDefault();
       void confirmSelection();
+      return;
     }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  function handlePointerDown(event) {
+    if (!panel) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || panel.contains(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    close();
   }
 
   function place(anchorEl) {
@@ -138,6 +152,7 @@ export function createHideSnoozeChoiceController({
   }
 
   document.addEventListener('keydown', handleKeydown, true);
+  document.addEventListener('pointerdown', handlePointerDown, true);
   window.addEventListener('resize', () => {
     if (!panel) return;
     place(currentAnchorEl);
