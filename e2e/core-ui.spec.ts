@@ -1188,25 +1188,29 @@ test('hidden tray shows snooze days-left only for snoozed cards', async ({ page 
   await expect(skippedHiddenItem.locator('.hidden-tray-item__snooze')).toHaveCount(0);
 });
 
-test('hidden tray shows hour labels under one day and day labels from one day onward', async ({ page }) => {
+test('hidden tray shows countdown for future snoozes and Resurfaced badge for expired snoozes', async ({ page }) => {
   const fiveHoursTitle = `hidden-5h-${Date.now()}`;
   const dayBoundaryTitle = `hidden-24h-${Date.now()}`;
   const twoDaysTitle = `hidden-2d-${Date.now()}`;
   const expiredTitle = `hidden-expired-${Date.now()}`;
+  const unsnoozedTitle = `hidden-unsnoozed-${Date.now()}`;
   const fiveHoursCard = await createCard(page, fiveHoursTitle);
   const dayBoundaryCard = await createCard(page, dayBoundaryTitle);
   const twoDaysCard = await createCard(page, twoDaysTitle);
   const expiredCard = await createCard(page, expiredTitle);
+  const unsnoozedCard = await createCard(page, unsnoozedTitle);
   const fiveHoursID = await fiveHoursCard.getAttribute('data-id');
   const dayBoundaryID = await dayBoundaryCard.getAttribute('data-id');
   const twoDaysID = await twoDaysCard.getAttribute('data-id');
   const expiredID = await expiredCard.getAttribute('data-id');
+  const unsnoozedID = await unsnoozedCard.getAttribute('data-id');
   expect(fiveHoursID).toBeTruthy();
   expect(dayBoundaryID).toBeTruthy();
   expect(twoDaysID).toBeTruthy();
   expect(expiredID).toBeTruthy();
+  expect(unsnoozedID).toBeTruthy();
 
-  const hideResults = await page.evaluate(async ({ fiveHoursCardID, dayBoundaryCardID, twoDaysCardID, expiredCardID }) => {
+  const hideResults = await page.evaluate(async ({ fiveHoursCardID, dayBoundaryCardID, twoDaysCardID, expiredCardID, unsnoozedCardID }) => {
     const now = Date.now();
     const fiveHours = new Date(now + ((4 * 60 + 20) * 60 * 1000)).toISOString();
     const nearDayBoundary = new Date(now + ((23 * 60 + 10) * 60 * 1000)).toISOString();
@@ -1225,17 +1229,24 @@ test('hidden tray shows hour labels under one day and day labels from one day on
       dayBoundaryOk: await postHide(dayBoundaryCardID, nearDayBoundary),
       twoDaysOk: await postHide(twoDaysCardID, justOverDay),
       expiredOk: await postHide(expiredCardID, expired),
+      unsnoozedOk: (await fetch('/api/items/hide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: unsnoozedCardID, contextId: 'main-orbit' }),
+      })).ok,
     };
   }, {
     fiveHoursCardID: fiveHoursID,
     dayBoundaryCardID: dayBoundaryID,
     twoDaysCardID: twoDaysID,
     expiredCardID: expiredID,
+    unsnoozedCardID: unsnoozedID,
   });
   expect(hideResults.fiveHoursOk).toBeTruthy();
   expect(hideResults.dayBoundaryOk).toBeTruthy();
   expect(hideResults.twoDaysOk).toBeTruthy();
   expect(hideResults.expiredOk).toBeTruthy();
+  expect(hideResults.unsnoozedOk).toBeTruthy();
 
   await page.reload();
   await ensureHiddenTrayOpen(page);
@@ -1254,7 +1265,11 @@ test('hidden tray shows hour labels under one day and day labels from one day on
 
   const expiredHiddenItem = page.locator('.hidden-tray-item', { hasText: expiredTitle }).first();
   await expect(expiredHiddenItem).toBeVisible();
-  await expect(expiredHiddenItem.locator('.hidden-tray-item__snooze')).toHaveCount(0);
+  await expect(expiredHiddenItem.locator('.hidden-tray-item__snooze')).toHaveText('Resurfaced');
+
+  const unsnoozedHiddenItem = page.locator('.hidden-tray-item', { hasText: unsnoozedTitle }).first();
+  await expect(unsnoozedHiddenItem).toBeVisible();
+  await expect(unsnoozedHiddenItem.locator('.hidden-tray-item__snooze')).toHaveCount(0);
 });
 
 test('hidden tray starts an hourly refresh interval while open', async ({ page }) => {

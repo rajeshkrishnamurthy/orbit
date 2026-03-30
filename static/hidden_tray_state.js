@@ -77,19 +77,21 @@ export function createHiddenTrayController({
     }
     const msPerHour = 60 * 60 * 1000;
     const msPerDay = 24 * 60 * 60 * 1000;
-    const snoozeLabelFor = (item) => {
+    const snoozeBadgeFor = (item) => {
       const rawWakeAt = item && typeof item.snoozeWakeAt === 'string' ? item.snoozeWakeAt : '';
       if (!rawWakeAt) return null;
       const wakeAtMs = Date.parse(rawWakeAt);
       if (!Number.isFinite(wakeAtMs)) return null;
       const remainingMs = wakeAtMs - Date.now();
-      if (remainingMs <= 0) return null;
+      if (remainingMs <= 0) {
+        return { text: 'Resurfaced', kind: 'resurfaced' };
+      }
       if (remainingMs < msPerDay) {
         const hoursLeft = Math.max(1, Math.ceil(remainingMs / msPerHour));
-        return `${hoursLeft}h left`;
+        return { text: `${hoursLeft}h left`, kind: 'countdown' };
       }
       const daysLeft = Math.max(1, Math.ceil(remainingMs / msPerDay));
-      return `${daysLeft}d left`;
+      return { text: `${daysLeft}d left`, kind: 'countdown' };
     };
     hiddenItemsCache.forEach((item) => {
       const trayItem = document.createElement('div');
@@ -99,11 +101,14 @@ export function createHiddenTrayController({
       title.className = 'hidden-tray-item__title';
       title.textContent = item.title || 'Untitled';
       trayItem.appendChild(title);
-      const snoozeLabel = snoozeLabelFor(item);
-      if (snoozeLabel !== null) {
+      const snoozeBadge = snoozeBadgeFor(item);
+      if (snoozeBadge !== null) {
         const snooze = document.createElement('span');
         snooze.className = 'hidden-tray-item__snooze';
-        snooze.textContent = snoozeLabel;
+        if (snoozeBadge.kind === 'resurfaced') {
+          snooze.classList.add('hidden-tray-item__snooze--resurfaced');
+        }
+        snooze.textContent = snoozeBadge.text;
         trayItem.appendChild(snooze);
       }
       trayItem.draggable = true;

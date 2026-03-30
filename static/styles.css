@@ -175,6 +175,7 @@
 .hidden-tray-item:active{cursor:grabbing}
 .hidden-tray-item__title{min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hidden-tray-item__snooze{flex:0 0 auto;padding:2px 6px;border-radius:999px;background:rgba(86,107,174,.32);border:1px solid rgba(126,145,208,.52);color:#e5edff;font-size:10px;line-height:1.2;white-space:nowrap}
+.hidden-tray-item__snooze--resurfaced{background:rgba(74,138,118,.24);border-color:rgba(118,192,168,.58);color:#dcfff3}
 
 .hidden-tray-empty{font-size:12px;color:#aeb7d9;padding:6px 4px}
 
