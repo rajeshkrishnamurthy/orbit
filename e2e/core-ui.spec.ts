@@ -1188,6 +1188,120 @@ test('hidden tray shows snooze days-left only for snoozed cards', async ({ page 
   await expect(skippedHiddenItem.locator('.hidden-tray-item__snooze')).toHaveCount(0);
 });
 
+test('hidden tray shows hour labels under one day and day labels from one day onward', async ({ page }) => {
+  const fiveHoursTitle = `hidden-5h-${Date.now()}`;
+  const dayBoundaryTitle = `hidden-24h-${Date.now()}`;
+  const twoDaysTitle = `hidden-2d-${Date.now()}`;
+  const expiredTitle = `hidden-expired-${Date.now()}`;
+  const fiveHoursCard = await createCard(page, fiveHoursTitle);
+  const dayBoundaryCard = await createCard(page, dayBoundaryTitle);
+  const twoDaysCard = await createCard(page, twoDaysTitle);
+  const expiredCard = await createCard(page, expiredTitle);
+  const fiveHoursID = await fiveHoursCard.getAttribute('data-id');
+  const dayBoundaryID = await dayBoundaryCard.getAttribute('data-id');
+  const twoDaysID = await twoDaysCard.getAttribute('data-id');
+  const expiredID = await expiredCard.getAttribute('data-id');
+  expect(fiveHoursID).toBeTruthy();
+  expect(dayBoundaryID).toBeTruthy();
+  expect(twoDaysID).toBeTruthy();
+  expect(expiredID).toBeTruthy();
+
+  const hideResults = await page.evaluate(async ({ fiveHoursCardID, dayBoundaryCardID, twoDaysCardID, expiredCardID }) => {
+    const now = Date.now();
+    const fiveHours = new Date(now + ((4 * 60 + 20) * 60 * 1000)).toISOString();
+    const nearDayBoundary = new Date(now + ((23 * 60 + 10) * 60 * 1000)).toISOString();
+    const justOverDay = new Date(now + ((24 * 60 + 10) * 60 * 1000)).toISOString();
+    const expired = new Date(now - (5 * 60 * 1000)).toISOString();
+    const postHide = async (id: string, snoozeUntil: string) => {
+      const response = await fetch('/api/items/hide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, contextId: 'main-orbit', snoozeUntil }),
+      });
+      return response.ok;
+    };
+    return {
+      fiveHoursOk: await postHide(fiveHoursCardID, fiveHours),
+      dayBoundaryOk: await postHide(dayBoundaryCardID, nearDayBoundary),
+      twoDaysOk: await postHide(twoDaysCardID, justOverDay),
+      expiredOk: await postHide(expiredCardID, expired),
+    };
+  }, {
+    fiveHoursCardID: fiveHoursID,
+    dayBoundaryCardID: dayBoundaryID,
+    twoDaysCardID: twoDaysID,
+    expiredCardID: expiredID,
+  });
+  expect(hideResults.fiveHoursOk).toBeTruthy();
+  expect(hideResults.dayBoundaryOk).toBeTruthy();
+  expect(hideResults.twoDaysOk).toBeTruthy();
+  expect(hideResults.expiredOk).toBeTruthy();
+
+  await page.reload();
+  await ensureHiddenTrayOpen(page);
+
+  const fiveHoursHiddenItem = page.locator('.hidden-tray-item', { hasText: fiveHoursTitle }).first();
+  await expect(fiveHoursHiddenItem).toBeVisible();
+  await expect(fiveHoursHiddenItem.locator('.hidden-tray-item__snooze')).toHaveText('5h left');
+
+  const dayBoundaryHiddenItem = page.locator('.hidden-tray-item', { hasText: dayBoundaryTitle }).first();
+  await expect(dayBoundaryHiddenItem).toBeVisible();
+  await expect(dayBoundaryHiddenItem.locator('.hidden-tray-item__snooze')).toHaveText('24h left');
+
+  const twoDaysHiddenItem = page.locator('.hidden-tray-item', { hasText: twoDaysTitle }).first();
+  await expect(twoDaysHiddenItem).toBeVisible();
+  await expect(twoDaysHiddenItem.locator('.hidden-tray-item__snooze')).toHaveText('2d left');
+
+  const expiredHiddenItem = page.locator('.hidden-tray-item', { hasText: expiredTitle }).first();
+  await expect(expiredHiddenItem).toBeVisible();
+  await expect(expiredHiddenItem.locator('.hidden-tray-item__snooze')).toHaveCount(0);
+});
+
+test('hidden tray starts an hourly refresh interval while open', async ({ page }) => {
+  await page.addInitScript(() => {
+    const win = window as unknown as { __intervalTimeouts__?: number[] };
+    const originalSetInterval = window.setInterval.bind(window);
+    win.__intervalTimeouts__ = [];
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      win.__intervalTimeouts__!.push(Number(timeout));
+      return originalSetInterval(handler, timeout, ...args);
+    }) as typeof window.setInterval;
+  });
+
+  await page.goto('/');
+  await expect(page.locator('#surface')).toBeVisible();
+
+  const beforeHourlyIntervals = await page.evaluate(() => {
+    const win = window as unknown as { __intervalTimeouts__?: number[] };
+    return (win.__intervalTimeouts__ || []).filter((ms) => ms === 60 * 60 * 1000).length;
+  });
+
+  const title = `hidden-hourly-refresh-${Date.now()}`;
+  const created = await createCard(page, title);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  const hideResult = await page.evaluate(async ({ cardID }) => {
+    const response = await fetch('/api/items/hide', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cardID, contextId: 'main-orbit' }),
+    });
+    return response.ok;
+  }, { cardID: id });
+  expect(hideResult).toBeTruthy();
+
+  await page.reload();
+  await ensureHiddenTrayOpen(page);
+
+  const afterHourlyIntervals = await page.evaluate(() => {
+    const win = window as unknown as { __intervalTimeouts__?: number[] };
+    return (win.__intervalTimeouts__ || []).filter((ms) => ms === 60 * 60 * 1000).length;
+  });
+
+  expect(afterHourlyIntervals).toBeGreaterThan(beforeHourlyIntervals);
+});
+
 test('hide failure keeps card visible and shows warning', async ({ page }) => {
   const title = `hide-fail-${Date.now()}`;
   const created = await createCard(page, title);
