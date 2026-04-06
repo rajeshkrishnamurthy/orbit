@@ -455,6 +455,28 @@ void (async () => {
     mutationOrchestrator.savePin(pin);
   }
 
+  let foregroundRefreshInFlight = false;
+  async function runForegroundRefreshPass(){
+    if (mode !== 'focus') return;
+    if (foregroundRefreshInFlight) return;
+    if (document.hidden) return;
+    foregroundRefreshInFlight = true;
+    try {
+      const transport = await getMutationTransport();
+      const result = await transport.refreshForeground({ contextId: currentContextId });
+      if (!result || !result.ok || !result.data || !Array.isArray(result.data.items)) return;
+      for (const item of result.data.items) {
+        if (!item || !item.id) continue;
+        const pin = surface.querySelector(`.pin[data-id="${item.id}"]`);
+        if (!pin) continue;
+        applyTouchResponse(pin, item);
+      }
+      applyLens();
+    } finally {
+      foregroundRefreshInFlight = false;
+    }
+  }
+
   function showResurfaceAck(){
     undoAckController.showResurfaceAck();
   }
@@ -541,6 +563,14 @@ void (async () => {
     undoAckController.refreshAckMode();
     placeHiddenTray();
     if (pinActivityLogState) pinActivityLogState.repositionIfOpen();
+  });
+
+  window.addEventListener('focus', () => {
+    void runForegroundRefreshPass();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void runForegroundRefreshPass();
   });
 
   window.addEventListener('beforeunload', () => {

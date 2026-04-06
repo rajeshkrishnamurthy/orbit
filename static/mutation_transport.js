@@ -20,6 +20,7 @@ const ENDPOINTS = {
   itemsTouch: '/api/items/touch',
   itemsTouchUndo: '/api/items/touch/undo',
   itemsUnhideAt: '/api/items/unhide-at',
+  itemsRefreshForeground: '/api/items/refresh-foreground',
 };
 
 async function readTextSafe(response) {
@@ -300,6 +301,21 @@ export function createMutationTransport({ fetchImpl } = {}) {
         return { ok: true, status, endpoint: ENDPOINTS.itemsUnhideAt, data };
       } catch (err) {
         return { ok: false, status: null, endpoint: ENDPOINTS.itemsUnhideAt, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async refreshForeground({ contextId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsRefreshForeground, postBody({ contextId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsRefreshForeground, error: detail || `foreground refresh failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.itemsRefreshForeground, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsRefreshForeground, error: mutationErrorSummary(err) };
       }
     },
 

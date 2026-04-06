@@ -137,6 +137,7 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/complete", app.completeItemAPI)
 	mux.HandleFunc("/api/items/touch", app.touchItemAPI)
 	mux.HandleFunc("/api/items/touch/undo", app.undoTouchItemAPI)
+	mux.HandleFunc("/api/items/refresh-foreground", app.refreshForegroundAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
 	mux.HandleFunc("/api/items/resurfaced", app.resurfacedItemsAPI)
@@ -495,6 +496,31 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		InCenter:       item.InCenter,
 	}); err != nil {
 		log.Printf("encode undoTouchItemAPI response: %v", err)
+	}
+}
+
+func (a *App) refreshForegroundAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().RefreshForegroundTouchedState(reqCtx, ForegroundRefreshRequest{ContextID: in.ContextID})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": resp.Items}); err != nil {
+		log.Printf("encode refreshForegroundAPI response: %v", err)
 	}
 }
 

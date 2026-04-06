@@ -262,6 +262,22 @@ func (s *AppService) LatestActivityLog(ctx context.Context, req LatestActivityLo
 	return LatestActivityLogResponse{Entries: entries}, nil
 }
 
+type ForegroundRefreshRequest struct {
+	ContextID string
+}
+
+type ForegroundRefreshResponse struct {
+	Items []Item
+}
+
+func (s *AppService) RefreshForegroundTouchedState(ctx context.Context, req ForegroundRefreshRequest) (ForegroundRefreshResponse, error) {
+	items, err := s.store.refreshForegroundTouchedStateWithContext(ctx, req.ContextID)
+	if err != nil {
+		return ForegroundRefreshResponse{}, err
+	}
+	return ForegroundRefreshResponse{Items: items}, nil
+}
+
 type UnhideAtRequest struct {
 	ID        string
 	ContextID string

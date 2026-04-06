@@ -952,6 +952,7 @@ func TestHandlersRejectWrongMethodAndInvalidPayload(t *testing.T) {
 		{name: "delete item missing id 400", h: app.deleteItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "complete item missing id 400", h: app.completeItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "hide item missing id 400", h: app.hideItemAPI, method: http.MethodPost, body: `{"contextId":"main-orbit"}`, code: http.StatusBadRequest},
+		{name: "refresh foreground get 405", h: app.refreshForegroundAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "add activity log get 405", h: app.addActivityLogAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "add activity log missing itemId 400", h: app.addActivityLogAPI, method: http.MethodPost, body: `{"body":"x"}`, code: http.StatusBadRequest},
 		{name: "latest activity log get 405", h: app.latestActivityLogAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
@@ -972,6 +973,67 @@ func TestHandlersRejectWrongMethodAndInvalidPayload(t *testing.T) {
 				t.Fatalf("expected %d, got %d, body=%s", tc.code, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestRefreshForegroundAPIReturnsRecomputedStatesForCurrentContext(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxA := "t_ctx_foreground_a"
+	ctxB := "t_ctx_foreground_b"
+	for _, c := range []Context{
+		{ID: ctxA, Title: "Context A", SubNote: "", X: 400, Y: 260, Color: "var(--c1)"},
+		{ID: ctxB, Title: "Context B", SubNote: "", X: 420, Y: 280, Color: "var(--c2)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("upsertContext %s: %v", c.ID, err)
+		}
+	}
+
+	itemA := "t_foreground_item_a"
+	itemB := "t_foreground_item_b"
+	if err := s.update(Item{ID: itemA, ContextID: ctxA, Title: "A", SubNote: "", X: 100, Y: 100, Color: "var(--c1)"}); err != nil {
+		t.Fatalf("seed item A: %v", err)
+	}
+	if err := s.update(Item{ID: itemB, ContextID: ctxB, Title: "B", SubNote: "", X: 120, Y: 120, Color: "var(--c2)"}); err != nil {
+		t.Fatalf("seed item B: %v", err)
+	}
+
+	yesterday := time.Now().In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+	now := time.Now().In(time.Local).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, itemA, yesterday, now); err != nil {
+		t.Fatalf("insert touch fact for item A: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, itemB, localDayString(time.Now()), now); err != nil {
+		t.Fatalf("insert touch fact for item B: %v", err)
+	}
+
+	rr := postJSON(t, app.refreshForegroundAPI, map[string]any{"contextId": ctxA})
+	assertJSONResponse(t, rr, http.StatusOK)
+	resp := mustDecodeJSON[struct {
+		OK    bool   `json:"ok"`
+		Items []Item `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true")
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected exactly 1 item for context %q, got %d", ctxA, len(resp.Items))
+	}
+	if resp.Items[0].ID != itemA {
+		t.Fatalf("expected item %q in refresh response, got %q", itemA, resp.Items[0].ID)
+	}
+	if resp.Items[0].TouchedToday {
+		t.Fatalf("expected touchedToday=false for item touched yesterday, got true")
+	}
+
+	rrInvalid := httptest.NewRecorder()
+	reqInvalid := httptest.NewRequest(http.MethodPost, "/api/items/refresh-foreground", strings.NewReader("{"))
+	reqInvalid.Header.Set("Content-Type", "application/json")
+	app.refreshForegroundAPI(rrInvalid, reqInvalid)
+	if rrInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid json, got %d", rrInvalid.Code)
 	}
 }
 
