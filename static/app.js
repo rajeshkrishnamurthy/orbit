@@ -307,6 +307,15 @@ void (async () => {
     completeEffects: {
       handleCompleteSuccess: undoAckController.handleCompleteSuccess,
     },
+    activityLogEffects: {
+      openAfterEffectiveTouch(pin, { anchorEl } = {}) {
+        if (!pinActivityLogState) return;
+        const id = (pin?.dataset?.id || '').trim();
+        if (!id) return;
+        if (pinActivityLogState.isOpenForItem(id)) return;
+        pinActivityLogState.open(pin, { anchorEl });
+      },
+    },
   });
   pinActivityLogState = createPinActivityLogController({
     layoutShell,

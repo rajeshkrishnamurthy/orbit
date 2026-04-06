@@ -81,7 +81,7 @@ export function createPinDomController({
       touch.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        pinActions.touch(pin);
+        pinActions.touch(pin, { anchorEl: touch });
       });
     }
     const enter = pin.querySelector('.pin-enter');
