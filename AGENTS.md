@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Follow global AGENTS at ~/.openclaw/codex-global/AGENTS.md
+Follow global AGENTS at ~/.pi/agent/AGENTS.md
 
 ## Repo workflows
 
