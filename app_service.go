@@ -27,6 +27,7 @@ type HomeResponse struct {
 	Items               []Item
 	ResurfacedItems     []Item
 	Contexts            []Context
+	ContextStripEntries []ContextStripEntry
 	HiddenCount         int
 	Mode                string
 	CurrentContextID    string
@@ -70,15 +71,36 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
+	stripEntries, err := s.store.contextStripEntriesWithContext(ctx, ctxID)
+	if err != nil {
+		return HomeResponse{}, err
+	}
 	return HomeResponse{
 		Items:               items,
 		ResurfacedItems:     resurfacedItems,
+		ContextStripEntries: stripEntries,
 		HiddenCount:         hiddenN,
 		Mode:                "focus",
 		CurrentContextID:    cur.ID,
 		CurrentContextTitle: cur.Title,
 		MobileMode:          req.MobileMode,
 	}, nil
+}
+
+type ContextStripStatsRequest struct {
+	ContextID string
+}
+
+type ContextStripStatsResponse struct {
+	Entries []ContextStripEntry
+}
+
+func (s *AppService) ContextStripStats(ctx context.Context, req ContextStripStatsRequest) (ContextStripStatsResponse, error) {
+	entries, err := s.store.contextStripEntriesWithContext(ctx, req.ContextID)
+	if err != nil {
+		return ContextStripStatsResponse{}, err
+	}
+	return ContextStripStatsResponse{Entries: entries}, nil
 }
 
 type UpsertItemRequest struct {

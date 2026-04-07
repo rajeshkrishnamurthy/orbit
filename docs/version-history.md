@@ -27,6 +27,27 @@ Last updated: 2026-04-06
   - reflected in canonical: `docs/00-current-state.md` (section 2.6)
 - **Confidence:** High
 
+### Touch-triggered log assist flow
+- **Change:** After a successful effective Touch, Orbit auto-opens the existing Log Activity pop-up for that same card.
+- **Product impact:** Improves same-moment context capture while preserving semantic independence (touch commit is not blocked by log entry creation).
+- **Scope:** Card interaction flow (touch + activity-log assist).
+- **Source(s):**
+  - `docs/touch-log/02-feature-spec.md`
+  - `jsonl/touch-log/02-feature-spec.jsonl`
+  - reflected in canonical: `docs/00-current-state.md` (sections 2.6 and 2.8)
+- **Confidence:** High
+
+### Hidden control dual-count resurfacing visibility (resurface-count)
+- **Change:** Hidden chrome control now displays both total hidden count and resurfaced-ready subset count in one token, with hover explanation.
+- **Product impact:** Users can see resurfaced workload at a glance without opening Hidden tray.
+- **Scope:** Chrome Hidden control visibility/state reporting.
+- **Source(s):**
+  - `docs/resurface-count/01-discovery-handoff.md`
+  - `docs/resurface-count/02-feature-spec.md`
+  - `jsonl/resurface-count/02-feature-spec.jsonl`
+  - reflected in canonical: `docs/00-current-state.md` (section 2.5)
+- **Confidence:** High
+
 ---
 
 ## 2026-03-28

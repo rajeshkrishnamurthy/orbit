@@ -22,6 +22,8 @@ Primary evidence roots:
 - `docs/_history/orbit-spec-legacy/planning-resurface-shelf-handoff-2026-03-28.md`
 - `docs/foreground-trigger/02-feature-spec.md`
 - `docs/touch-log/02-feature-spec.md`
+- `docs/resurface-count/02-feature-spec.md`
+- `docs/chrome-context/02-feature-spec.md`
 
 ---
 
@@ -57,6 +59,15 @@ Card action UI:
 1. A Context is a named focus container with its own associated canvas.
 2. Entering a context moves the user into that context’s canvas.
 3. Context title is editable in focus view.
+4. From any context canvas, a center-top chrome context strip shows per-context compact counts in `visible/stale` format and supports one-click switching.
+5. Context strip ordering is deterministic: active context first, remaining contexts alphabetical by title (stable tie-break by context id).
+6. Capacity rule is deterministic:
+   - if total contexts <= 8, show all in strip
+   - if total contexts > 8, show 7 context entries plus `+N` overflow
+7. Overflow list entries preserve the same `visible/stale` count format and one-click switching behavior.
+8. Count semantics are fixed:
+   - `visible_count` excludes hidden cards
+   - `stale_count` counts stale cards among visible (non-hidden) cards only
 
 ### 2.5 Hidden + snooze + resurface behavior (confidence: high)
 1. Hidden tray + snooze/resurface behavior is current.
@@ -66,6 +77,10 @@ Card action UI:
    - due/resurfaced: `Resurfaced` badge
 4. Resurfaced cards are surfaced at the top of Hidden tray when viewing hidden items.
 5. No separate “resurface shelf” is part of current behavior.
+6. Hidden chrome control now shows dual counts at all times: `Hidden {hidden_total} · {resurfaced_count}↑`.
+7. `hidden_total` includes resurfaced cards by definition, and `resurfaced_count` is a subset with invariant `0 <= resurfaced_count <= hidden_total`.
+8. Hidden-control hover tooltip uses: `Hidden {hidden_total}, resurfaced {resurfaced_count}`.
+9. Hidden/resurfaced counts recompute on foreground resume and on hidden-membership transitions (hide, unhide/restore, hidden-to-canvas moves, and due-membership changes processed in refresh paths).
 
 ### 2.6 Touch + active/stale semantics (confidence: high)
 1. Touch is explicit user action only; never inferred by system activity.

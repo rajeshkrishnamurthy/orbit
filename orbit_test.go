@@ -2717,6 +2717,94 @@ func TestHomeUnknownContextReturns500WithoutPanic(t *testing.T) {
 	}
 }
 
+type contextStripStatsEntry struct {
+	ContextID string `json:"contextId"`
+	Visible   int    `json:"visibleCount"`
+	Stale     int    `json:"staleCount"`
+	IsActive  bool   `json:"isActive"`
+}
+
+func seedContextForStripTest(t *testing.T, s *Store, id, title string) {
+	t.Helper()
+	if err := s.upsertContext(Context{ID: id, Title: title, X: 560, Y: 320, Color: "var(--c1)"}); err != nil {
+		t.Fatalf("seed context %q: %v", id, err)
+	}
+}
+
+func seedItemForStripTest(t *testing.T, s *Store, id, contextID string, x, y float64) {
+	t.Helper()
+	if err := s.update(Item{ID: id, ContextID: contextID, Title: id, X: x, Y: y, Color: "var(--c2)"}); err != nil {
+		t.Fatalf("seed item %q: %v", id, err)
+	}
+}
+
+func decodeContextStripStatsEntries(t *testing.T, rr *httptest.ResponseRecorder) []contextStripStatsEntry {
+	t.Helper()
+	var resp struct {
+		OK      bool                     `json:"ok"`
+		Entries []contextStripStatsEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%q", err, rr.Body.String())
+	}
+	if !resp.OK {
+		t.Fatalf("expected ok=true response, got body=%s", rr.Body.String())
+	}
+	return resp.Entries
+}
+
+func contextStripEntryIndex(entries []contextStripStatsEntry, contextID string) int {
+	for i, entry := range entries {
+		if entry.ContextID == contextID {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestContextStripStatsAPIProvidesOrderedCounts(t *testing.T) {
+	app, s := newTestApp(t)
+
+	seedContextForStripTest(t, s, "ctx-alpha-2", "alpha")
+	seedContextForStripTest(t, s, "ctx-alpha-1", "Alpha")
+	seedContextForStripTest(t, s, "ctx-zeta", "Zeta")
+
+	seedItemForStripTest(t, s, "ctx-zeta-hidden", "ctx-zeta", 980, 560)
+	if err := s.hideWithContext(context.Background(), "ctx-zeta-hidden", "ctx-zeta"); err != nil {
+		t.Fatalf("hide seeded item: %v", err)
+	}
+	seedItemForStripTest(t, s, "ctx-zeta-visible", "ctx-zeta", 980, 560)
+
+	seedItemForStripTest(t, s, "ctx-alpha-stale", "ctx-alpha-1", 980, 560)
+	if _, err := s.db.Exec(`UPDATE items SET created_at=?, updated_at=? WHERE id=?`, time.Now().AddDate(0, 0, -6).Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), "ctx-alpha-stale"); err != nil {
+		t.Fatalf("force stale created_at: %v", err)
+	}
+
+	rr := postJSON(t, app.contextStripStatsAPI, map[string]any{"contextId": "ctx-zeta"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	entries := decodeContextStripStatsEntries(t, rr)
+	if len(entries) < 3 {
+		t.Fatalf("expected at least 3 entries, got %d", len(entries))
+	}
+	zeta := contextStripEntryIndex(entries, "ctx-zeta")
+	alpha1 := contextStripEntryIndex(entries, "ctx-alpha-1")
+	alpha2 := contextStripEntryIndex(entries, "ctx-alpha-2")
+	if zeta == -1 || alpha1 == -1 || alpha2 == -1 {
+		t.Fatalf("missing expected entries in response: %+v", entries)
+	}
+	if !entries[zeta].IsActive || entries[zeta].Visible != 1 || entries[zeta].Stale != 0 {
+		t.Fatalf("unexpected zeta entry: %+v", entries[zeta])
+	}
+	if entries[alpha1].Visible != 1 || entries[alpha1].Stale != 1 {
+		t.Fatalf("expected alpha-1 counts visible=1 stale=1, got visible=%d stale=%d", entries[alpha1].Visible, entries[alpha1].Stale)
+	}
+	if alpha1 > alpha2 {
+		t.Fatalf("expected tie-break ordering by context id for equal-case titles, got alpha-1 index=%d alpha-2 index=%d", alpha1, alpha2)
+	}
+}
+
 func TestPruneBackupsKeepOnePrunesToSingleNewest(t *testing.T) {
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "orbit.db")

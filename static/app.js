@@ -12,6 +12,7 @@ void (async () => {
     {createUndoAckController},
     {createResurfaceShelfController},
     {createHideSnoozeChoiceController},
+    {createChromeContextStripController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
@@ -25,11 +26,13 @@ void (async () => {
     import('/static/undo_ack_state.js'),
     import('/static/resurface_shelf_state.js'),
     import('/static/hide_snooze_choice_state.js'),
+    import('/static/chrome_context_strip.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
+  const chromeContextStripEl = document.getElementById('chrome-context-strip');
   const systemAckArea = document.getElementById('system-ack-stack');
   const resurfaceShelf = document.getElementById('resurface-shelf');
   const boundaryEl = document.createElement('div');
@@ -37,6 +40,7 @@ void (async () => {
   surface.appendChild(boundaryEl);
   const items = window.__ITEMS__ || [];
   const resurfacedItems = window.__RESURFACED_ITEMS__ || [];
+  const initialContextStripEntries = window.__CONTEXT_STRIP_ENTRIES__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const centerSemantics = readCenterSemantics();
@@ -53,6 +57,7 @@ void (async () => {
   let pinActivityLogState = null;
   let resurfaceShelfState = null;
   let hideSnoozeChoiceState = null;
+  let chromeContextStripState = null;
 
   function readCenterSemantics() {
     const candidates = [
@@ -128,6 +133,28 @@ void (async () => {
     }
     return mutationTransportPromise;
   }
+
+  function navigateToContext(targetContextId) {
+    const id = (targetContextId || '').trim();
+    if (!id || id === currentContextId) return;
+    location.href = '/?ctx=' + encodeURIComponent(id);
+  }
+
+  async function refreshChromeContextStrip() {
+    if (!chromeContextStripState || mode !== 'focus') return;
+    await chromeContextStripState.refresh();
+  }
+
+  chromeContextStripState = createChromeContextStripController({
+    documentRef: document,
+    container: chromeContextStripEl,
+    mode,
+    activeContextId: currentContextId,
+    initialEntries: initialContextStripEntries,
+    getTransport: getMutationTransport,
+    onNavigate: navigateToContext,
+  });
+
   pinPresenter = createPinPresenter({
     documentRef: document,
     mode,
@@ -144,7 +171,9 @@ void (async () => {
     applyTouchResponse,
   });
   async function persistContextTitle(){
-    return mutationOrchestrator.persistContextTitle(contextNameEl);
+    const result = await mutationOrchestrator.persistContextTitle(contextNameEl);
+    await refreshChromeContextStrip();
+    return result;
   }
   if (mode === 'focus' && contextNameEl) {
     contextNameEl.contentEditable = 'true';
@@ -282,6 +311,7 @@ void (async () => {
         lensState.forgetPin(pin.dataset.id);
         if (activePin === pin) setActivePin(null);
         pin.remove();
+        void refreshChromeContextStrip();
       },
       handleDeleteSuccess(pin, payload) {
         lensState.forgetPin(pin.dataset.id);
@@ -292,6 +322,7 @@ void (async () => {
           return;
         }
         if (mode === 'focus') undoAckController.showDeleteUndo(payload);
+        void refreshChromeContextStrip();
       },
       handleDiscardRemove(pin) {
         if (activePin === pin) setActivePin(null);
@@ -304,9 +335,11 @@ void (async () => {
     touchEffects: {
       applyTouchResponse,
       showTouchUndo: undoAckController.showTouchUndo,
+      onTouchCommitted: refreshChromeContextStrip,
     },
     completeEffects: {
       handleCompleteSuccess: undoAckController.handleCompleteSuccess,
+      onCompleteCommitted: refreshChromeContextStrip,
     },
     activityLogEffects: {
       openAfterEffectiveTouch(pin, { anchorEl } = {}) {
@@ -485,6 +518,7 @@ void (async () => {
       if (hiddenTrayState && typeof hiddenTrayState.recomputeCounts === 'function') {
         await hiddenTrayState.recomputeCounts({ runDueRefresh: true });
       }
+      await refreshChromeContextStrip();
     } finally {
       foregroundRefreshInFlight = false;
     }
@@ -517,6 +551,7 @@ void (async () => {
       showResurfaceAck,
       onUnhideSuccess(id) {
         if (resurfaceShelfState) resurfaceShelfState.removeItem(id);
+        void refreshChromeContextStrip();
       },
     });
   });
@@ -528,18 +563,23 @@ void (async () => {
       closeActivityLogPopover();
       return;
     }
-    if (hiddenTrayState.isOpen()) closeHiddenTray();
+    if (hiddenTrayState.isOpen()) {
+      closeHiddenTray();
+      return;
+    }
+    if (chromeContextStripState) chromeContextStripState.closeOverflow();
   });
 
   document.addEventListener('pointerdown', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
+    if (chromeContextStripState) chromeContextStripState.handleGlobalPointerDown(target);
     if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity')) return;
     if (target.closest('.sw')) {
       closeHiddenTray();
       return;
     }
-    if (target.closest('.filters-tray')) return;
+    if (target.closest('.filters-tray') || target.closest('.chrome-context-strip')) return;
     if (surface.contains(target)) return;
     closeActivityLogPopover();
     closeHiddenTray();
@@ -567,6 +607,7 @@ void (async () => {
   renderLensButtons();
   syncCanvasViewportRect();
   applyLens();
+  void refreshChromeContextStrip();
 
   window.addEventListener('resize', () => {
     syncCanvasViewportRect();
@@ -576,6 +617,7 @@ void (async () => {
     undoAckController.refreshAckMode();
     placeHiddenTray();
     if (pinActivityLogState) pinActivityLogState.repositionIfOpen();
+    if (chromeContextStripState) chromeContextStripState.closeOverflow();
   });
 
   window.addEventListener('focus', () => {

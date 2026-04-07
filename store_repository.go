@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -347,6 +349,100 @@ func (s *Store) contextsWithContext(ctx context.Context) ([]Context, error) {
 		return out, fmt.Errorf("iterate contexts: %w", err)
 	}
 	return out, nil
+}
+
+type contextStripItemMeta struct {
+	contextID  string
+	inCenter   bool
+	createdDay string
+}
+
+func (s *Store) loadContextStripItemMetaWithContext(ctx context.Context) (map[string]contextStripItemMeta, []string, error) {
+	rows, err := s.queryContext(ctx, `SELECT id, context_id, x, y, created_at FROM items WHERE hidden=0 AND completed=0`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query visible items for context strip: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	metaByID := map[string]contextStripItemMeta{}
+	ids := []string{}
+	for rows.Next() {
+		var (
+			itemID    string
+			contextID string
+			x         float64
+			y         float64
+			createdAt string
+		)
+		if err := rows.Scan(&itemID, &contextID, &x, &y, &createdAt); err != nil {
+			return nil, nil, fmt.Errorf("scan context strip item row: %w", err)
+		}
+		createdDay, parseErr := parseCreatedLocalDay(itemID, createdAt)
+		if parseErr != nil {
+			return nil, nil, parseErr
+		}
+		metaByID[itemID] = contextStripItemMeta{contextID: contextID, inCenter: classifyDesktopBand(x, y), createdDay: createdDay}
+		ids = append(ids, itemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate context strip item rows: %w", err)
+	}
+	return metaByID, ids, nil
+}
+
+func applyContextStripCounts(entriesByID map[string]ContextStripEntry, metaByID map[string]contextStripItemMeta, summaries map[string]touchSummary) {
+	for itemID, meta := range metaByID {
+		entry, ok := entriesByID[meta.contextID]
+		if !ok {
+			continue
+		}
+		entry.VisibleCount++
+		state := Item{InCenter: meta.inCenter}
+		deriveTouchState(&state, meta.createdDay, summaries[itemID])
+		if state.Stale {
+			entry.StaleCount++
+		}
+		entriesByID[meta.contextID] = entry
+	}
+}
+
+func sortContextStripEntries(entries []ContextStripEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		a := strings.ToLower(entries[i].ContextTitle)
+		b := strings.ToLower(entries[j].ContextTitle)
+		if a != b {
+			return a < b
+		}
+		return entries[i].ContextID < entries[j].ContextID
+	})
+}
+
+func (s *Store) contextStripEntriesWithContext(ctx context.Context, currentContextID string) ([]ContextStripEntry, error) {
+	currentID := contextOrDefault(currentContextID)
+	contexts, err := s.contextsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entriesByID := make(map[string]ContextStripEntry, len(contexts))
+	for _, c := range contexts {
+		entriesByID[c.ID] = ContextStripEntry{ContextID: c.ID, ContextTitle: c.Title, IsActive: c.ID == currentID}
+	}
+	metaByID, ids, err := s.loadContextStripItemMetaWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summaries, err := s.touchSummariesWithContext(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	applyContextStripCounts(entriesByID, metaByID, summaries)
+
+	entries := make([]ContextStripEntry, 0, len(entriesByID))
+	for _, entry := range entriesByID {
+		entries = append(entries, entry)
+	}
+	sortContextStripEntries(entries)
+	return entries, nil
 }
 
 func (s *Store) contextByID(id string) (*Context, error) {

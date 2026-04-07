@@ -58,6 +58,14 @@ type Context struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+type ContextStripEntry struct {
+	ContextID    string `json:"contextId"`
+	ContextTitle string `json:"contextTitle"`
+	IsActive     bool   `json:"isActive"`
+	VisibleCount int    `json:"visibleCount"`
+	StaleCount   int    `json:"staleCount"`
+}
+
 type ActivityLogEntry struct {
 	ID        string    `json:"id"`
 	ItemID    string    `json:"itemId"`
@@ -147,6 +155,7 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/activity-log/latest", app.latestActivityLogAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
+	mux.HandleFunc("/api/contexts/strip-stats", app.contextStripStatsAPI)
 	return mux, nil
 }
 
@@ -232,6 +241,29 @@ func writePageError(w http.ResponseWriter, err error, p apiErrorPolicy) {
 	http.Error(w, body.Message, status)
 }
 
+func marshalHomeJSON(resp HomeResponse) (template.JS, template.JS, template.JS, error) {
+	if resp.Mode == "contexts" {
+		itemsJSONBytes, err := json.Marshal(resp.Contexts)
+		if err != nil {
+			return "", "", "", fmt.Errorf("marshal contexts payload: %w", err)
+		}
+		return template.JS(itemsJSONBytes), template.JS("[]"), template.JS("[]"), nil
+	}
+	itemsJSONBytes, err := json.Marshal(resp.Items)
+	if err != nil {
+		return "", "", "", fmt.Errorf("marshal focus items payload: %w", err)
+	}
+	resurfacedJSONBytes, err := json.Marshal(resp.ResurfacedItems)
+	if err != nil {
+		return "", "", "", fmt.Errorf("marshal resurfaced payload: %w", err)
+	}
+	contextStripJSONBytes, err := json.Marshal(resp.ContextStripEntries)
+	if err != nil {
+		return "", "", "", fmt.Errorf("marshal context strip payload: %w", err)
+	}
+	return template.JS(itemsJSONBytes), template.JS(resurfacedJSONBytes), template.JS(contextStripJSONBytes), nil
+}
+
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -248,31 +280,11 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
-	var (
-		itemsJSONBytes []byte
-		itemsJSON      template.JS
-		resurfacedJSON = template.JS("[]")
-	)
-	if resp.Mode == "contexts" {
-		itemsJSONBytes, err = json.Marshal(resp.Contexts)
-		if err != nil {
-			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-	} else {
-		itemsJSONBytes, err = json.Marshal(resp.Items)
-		if err != nil {
-			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-		resurfacedJSONBytes, marshalErr := json.Marshal(resp.ResurfacedItems)
-		if marshalErr != nil {
-			writePageError(w, marshalErr, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-		resurfacedJSON = template.JS(resurfacedJSONBytes)
+	itemsJSON, resurfacedJSON, contextStripJSON, err := marshalHomeJSON(resp)
+	if err != nil {
+		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
 	}
-	itemsJSON = template.JS(itemsJSONBytes)
 	semanticsJSONBytes, err := json.Marshal(centerPeripherySemantics())
 	if err != nil {
 		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
@@ -286,6 +298,7 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		"CurrentContextID":    resp.CurrentContextID,
 		"CurrentContextTitle": resp.CurrentContextTitle,
 		"ResurfacedItemsJSON": resurfacedJSON,
+		"ContextStripJSON":    contextStripJSON,
 		"CenterSemanticsJSON": semanticsJSON,
 		"MobileMode":          resp.MobileMode,
 	}); err != nil {
@@ -849,6 +862,31 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"ok":true,"id":"` + resp.ID + `"}`)); err != nil {
 		log.Printf("write contextsAPI response: %v", err)
+	}
+}
+
+func (a *App) contextStripStatsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().ContextStripStats(reqCtx, ContextStripStatsRequest{ContextID: in.ContextID})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entries": resp.Entries}); err != nil {
+		log.Printf("encode contextStripStatsAPI response: %v", err)
 	}
 }
 

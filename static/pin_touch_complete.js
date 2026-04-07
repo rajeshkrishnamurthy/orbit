@@ -12,8 +12,8 @@ export function createPinTouchCompleteController({
     cancelPendingSave,
     showCanvasWarning,
   } = runtime;
-  const {applyTouchResponse, showTouchUndo} = touchEffects;
-  const {handleCompleteSuccess} = completeEffects;
+  const {applyTouchResponse, showTouchUndo, onTouchCommitted} = touchEffects;
+  const {handleCompleteSuccess, onCompleteCommitted} = completeEffects;
   const {openAfterEffectiveTouch} = activityLogEffects || {};
 
   async function touchPinImmediate(pin, { anchorEl } = {}) {
@@ -47,6 +47,9 @@ export function createPinTouchCompleteController({
           }
         }
         showTouchUndo(pin, payload);
+      }
+      if (typeof onTouchCommitted === 'function') {
+        await onTouchCommitted();
       }
     } catch (_err) {
       showCanvasWarning('Unable to touch card. Please try again.');
@@ -82,6 +85,9 @@ export function createPinTouchCompleteController({
       return;
     }
     handleCompleteSuccess(pin, payload);
+    if (typeof onCompleteCommitted === 'function') {
+      await onCompleteCommitted();
+    }
   }
 
   return {

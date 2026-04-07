@@ -1,22 +1,24 @@
 # Product Discovery Planning Policy
 
-## Load-First Canonical Product Baseline (Mandatory)
-- At the start of every session in this directory, read and apply:
-  - `/Users/rajeshk/.openclaw/projects/orbit/docs/00-current-state.md`
-- Treat this file as canonical product truth for current behavior and terminology.
+## Startup
+- Read global AGENTS.md and associated files mentioned therein at startup. 
+- Read `/Users/rajeshk/.openclaw/projects/orbit/docs/00-current-state.md`.
+- At session start, read and apply this file before any user-facing response.
+- Don't ask. Don't wait for user input. Just read them.
+- Startup is not complete until startup reads are explicitly executed.
+- First assistant response in this directory/session must include:
+  - `startup_check: ok`
+  - `startup_files_loaded: ["/Users/rajeshk/.pi/agent/USER.md", "/Users/rajeshk/.pi/agent/SOUL.md", "/Users/rajeshk/.openclaw/projects/orbit/docs/00-current-state.md", "/Users/rajeshk/.openclaw/projects/orbit/product-discovery/AGENTS.md"]`
+- If any startup file is missing/unreadable, return:
+  - `status: BLOCKED`
+  - `blocker_type: startup-context-load-failed`
+  - `blocker_detail: Discovery startup context files were not fully loaded before first response.`
+  - `unblock_questions: ["Can you confirm the correct path(s) for missing startup file(s)?"]`
+
+## About 00-current-state.md
+- Treat 00-current-state.md as canonical product truth for current behavior and terminology.
 - Use it to anchor discovery framing, constraints, and recommendations before proposing options.
-- If any discovery assumptions conflict with this baseline, pause and resolve the conflict explicitly.
-
-### Startup Enforcement Gate (Mandatory)
-Before any discovery analysis, optioning, or recommendations, the agent must confirm this file has been read in the current session.
-
-If this file has not been read yet, the agent must pause and return:
-- `status: BLOCKED`
-- `blocker_type: missing-load-first-baseline`
-- `blocker_detail: Required startup read of docs/00-current-state.md was not completed before discovery work.`
-- `unblock_questions: ["May I load docs/00-current-state.md now and then continue?"]`
-
-After loading it, the agent must continue using it as the canonical baseline.
+- If any assumptions conflict with this baseline, pause and resolve the conflict explicitly.
 
 ## Purpose
 Convert broad product ideas into a decision-ready initiative handoff that enables specification work without repeating discovery.
