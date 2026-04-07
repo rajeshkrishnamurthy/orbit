@@ -5,10 +5,12 @@ export function createHiddenTrayController({
   mode,
   currentContextId,
   initialHiddenCount,
+  initialResurfacedCount,
   getMutationTransport,
   syncCanvasViewportRect,
 }) {
-  let hiddenCount = initialHiddenCount || 0;
+  let hiddenCount = Math.max(0, Number(initialHiddenCount) || 0);
+  let resurfacedCount = Math.max(0, Math.min(hiddenCount, Number(initialResurfacedCount) || 0));
   let trayOpen = false;
   let hiddenItemsCache = [];
   const pendingUnhide = new Map();
@@ -67,6 +69,49 @@ export function createHiddenTrayController({
     hiddenTray.innerHTML = '';
     trayOpen = false;
     renderButton();
+  }
+
+  function isResurfacedReady(item) {
+    const rawWakeAt = item && typeof item.snoozeWakeAt === 'string' ? item.snoozeWakeAt : '';
+    if (!rawWakeAt) return false;
+    const wakeAtMs = Date.parse(rawWakeAt);
+    if (!Number.isFinite(wakeAtMs)) return false;
+    return wakeAtMs <= Date.now();
+  }
+
+  function deriveCounts(items) {
+    const hiddenTotal = Array.isArray(items) ? items.length : 0;
+    let resurfacedReady = 0;
+    (Array.isArray(items) ? items : []).forEach((item) => {
+      if (isResurfacedReady(item)) resurfacedReady += 1;
+    });
+    return {
+      hiddenTotal,
+      resurfacedCount: Math.max(0, Math.min(hiddenTotal, resurfacedReady)),
+    };
+  }
+
+  async function recomputeCounts({ runDueRefresh = false } = {}) {
+    try {
+      const transport = await getMutationTransport();
+      if (runDueRefresh) {
+        const resurfacedResult = await transport.loadResurfacedItems({ contextId: currentContextId });
+        if (!resurfacedResult.ok) throw new Error(resurfacedResult.error || 'resurfaced load failed');
+      }
+      const result = await transport.loadHiddenItems({ contextId: currentContextId });
+      if (!result.ok) throw new Error(result.error || 'hidden load failed');
+      const items = (result.data?.items || []).filter((item) => !pendingUnhide.has(item.id));
+      const next = deriveCounts(items);
+      hiddenCount = next.hiddenTotal;
+      resurfacedCount = next.resurfacedCount;
+      if (trayOpen) {
+        hiddenItemsCache = items;
+        renderHiddenTrayItems();
+      }
+      renderButton();
+    } catch (_err) {
+      // keep last known counts
+    }
   }
 
   function renderHiddenTrayItems() {
@@ -156,6 +201,10 @@ export function createHiddenTrayController({
       const data = result.data || {};
       if (!trayOpen) return;
       hiddenItemsCache = (data.items || []).filter((item) => !pendingUnhide.has(item.id));
+      const next = deriveCounts(hiddenItemsCache);
+      hiddenCount = next.hiddenTotal;
+      resurfacedCount = next.resurfacedCount;
+      renderButton();
       renderHiddenTrayItems();
     } catch (_err) {
       if (!trayOpen) return;
@@ -164,13 +213,10 @@ export function createHiddenTrayController({
   }
 
   function renderButton() {
-    hiddenBtn.textContent = `Hidden (${hiddenCount})`;
-    const shouldHide = hiddenCount <= 0;
-    hiddenBtn.hidden = shouldHide;
-    if (shouldHide && trayOpen) {
-      close();
-      return;
-    }
+    hiddenBtn.textContent = `Hidden ${hiddenCount} · ${resurfacedCount}↑`;
+    hiddenBtn.title = `Hidden ${hiddenCount}, resurfaced ${resurfacedCount}`;
+    hiddenBtn.dataset.hiddenCount = String(hiddenCount);
+    hiddenBtn.dataset.resurfacedCount = String(resurfacedCount);
     if (trayOpen) placeHiddenTray();
     syncCanvasViewportRect();
   }
@@ -181,7 +227,9 @@ export function createHiddenTrayController({
 
   function handleHideSuccess(resultData) {
     hiddenCount = (resultData && Number.isFinite(Number(resultData.hiddenCount))) ? Number(resultData.hiddenCount) : (hiddenCount + 1);
+    resurfacedCount = Math.max(0, Math.min(hiddenCount, resurfacedCount));
     renderButton();
+    void recomputeCounts();
     if (trayOpen) open();
   }
 
@@ -228,6 +276,8 @@ export function createHiddenTrayController({
     pendingUnhide.set(id, { item, index: itemIndex, x, y });
     hiddenItemsCache = hiddenItemsCache.filter((current) => current.id !== id);
     hiddenCount = Math.max(0, hiddenCount - 1);
+    if (isResurfacedReady(item)) resurfacedCount = Math.max(0, resurfacedCount - 1);
+    resurfacedCount = Math.max(0, Math.min(hiddenCount, resurfacedCount));
     renderButton();
     syncTray();
     try {
@@ -252,6 +302,7 @@ export function createHiddenTrayController({
       if (!surface.querySelector(`.pin[data-id="${id}"]`)) createPin(restoredItem, false, true);
       if (typeof onUnhideSuccess === 'function') onUnhideSuccess(id);
       showResurfaceAck();
+      void recomputeCounts();
     } catch (_err) {
       const pending = pendingUnhide.get(id);
       if (!pending) return;
@@ -263,6 +314,8 @@ export function createHiddenTrayController({
           hiddenItemsCache.push(pending.item);
         }
         hiddenCount += 1;
+        if (isResurfacedReady(pending.item)) resurfacedCount += 1;
+        resurfacedCount = Math.max(0, Math.min(hiddenCount, resurfacedCount));
         renderButton();
         syncTray();
       }
@@ -278,6 +331,7 @@ export function createHiddenTrayController({
     handleSurfaceDrop,
     isOpen,
     open,
+    recomputeCounts,
     renderButton,
     repositionIfOpen,
     syncTray,

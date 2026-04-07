@@ -230,6 +230,7 @@ void (async () => {
     mode,
     currentContextId,
     initialHiddenCount: window.__HIDDEN_COUNT__ || 0,
+    initialResurfacedCount: Array.isArray(resurfacedItems) ? resurfacedItems.length : 0,
     getMutationTransport,
     syncCanvasViewportRect,
   });
@@ -481,6 +482,9 @@ void (async () => {
         applyTouchResponse(pin, item);
       }
       applyLens();
+      if (hiddenTrayState && typeof hiddenTrayState.recomputeCounts === 'function') {
+        await hiddenTrayState.recomputeCounts({ runDueRefresh: true });
+      }
     } finally {
       foregroundRefreshInFlight = false;
     }
