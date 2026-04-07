@@ -81,10 +81,25 @@ export function createHideSnoozeChoiceController({
       moveSelection(1);
       return;
     }
-    if (event.key === 'Enter' || event.key === 'Escape') {
+    if (event.key === 'Enter') {
       event.preventDefault();
       void confirmSelection();
+      return;
     }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  function handleDocumentPointerDown(event) {
+    if (!panel) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || panel.contains(target)) return;
+    // Treat outside click as dismiss-only to avoid committing hide implicitly.
+    close();
+    event.preventDefault();
+    event.stopPropagation();
   }
 
   function place(anchorEl) {
@@ -138,6 +153,7 @@ export function createHideSnoozeChoiceController({
   }
 
   document.addEventListener('keydown', handleKeydown, true);
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true);
   window.addEventListener('resize', () => {
     if (!panel) return;
     place(currentAnchorEl);

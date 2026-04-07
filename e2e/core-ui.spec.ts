@@ -118,7 +118,7 @@ async function getHiddenCount(page: Page): Promise<number> {
   if ((await hiddenToggle.count()) > 0) {
     const count = await hiddenToggle.evaluate((el) => {
       const text = (el.textContent || '').trim();
-      const labelMatch = text.match(/\((\d+)\)\s*$/);
+      const labelMatch = text.match(/^Hidden\s+(\d+)\s+·\s+\d+↑$/);
       if (labelMatch) return Number(labelMatch[1]);
       const datasetCount = Number((el as HTMLButtonElement).dataset.hiddenCount || '');
       if (Number.isFinite(datasetCount)) return datasetCount;
@@ -310,7 +310,7 @@ test('top-left chrome keeps the primary row visible and filters controls open by
   const hideProbe = await createCard(page, `hidden-probe-${Date.now()}`, 1180, 680);
   await openActionDrawer(hideProbe);
   await hideProbe.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(initialHiddenCount);
   await expect(hiddenToggle).toBeVisible();
 
@@ -720,7 +720,7 @@ test('filters panel keeps Hidden and lens controls on one row', async ({ page })
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(card);
   await card.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
 
   const hiddenToggle = page.locator('#hidden-toggle');
@@ -749,7 +749,7 @@ test('filters panel width is content-tight when slider is hidden', async ({ page
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(card);
   await card.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
 
   const panel = page.locator('#filters-panel');
@@ -923,7 +923,7 @@ test('hidden tray remains open during filters interactions and closes independen
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(created);
   await created.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount + 1);
 
@@ -1046,7 +1046,7 @@ test('hide/unhide updates hidden tray count accurately', async ({ page }) => {
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(created);
   await created.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
 
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount + 1);
@@ -1092,8 +1092,8 @@ test('hide chooser defaults to 3 days and Enter confirms selected option', async
   expect(delta).toBeLessThan(73 * 60 * 60 * 1000);
 });
 
-test('hide chooser arrow keys move selection and Escape confirms current option', async ({ page }) => {
-  const created = await createCard(page, `hide-escape-select-${Date.now()}`);
+test('hide chooser arrow keys move selection and Enter confirms current option', async ({ page }) => {
+  const created = await createCard(page, `hide-enter-select-${Date.now()}`);
   const id = await created.getAttribute('data-id');
   expect(id).toBeTruthy();
 
@@ -1110,7 +1110,7 @@ test('hide chooser arrow keys move selection and Escape confirms current option'
   await created.locator('.pin-action-drawer .pin-hide').click();
   await page.keyboard.press('ArrowLeft');
   await expect(page.locator('.hide-snooze-chooser__option[data-selected="true"]')).toContainText('1 day');
-  await confirmHideChooserWithKey(page, 'Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
 
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
   await expect.poll(() => !!hidePayload).toBeTruthy();
@@ -1120,6 +1120,62 @@ test('hide chooser arrow keys move selection and Escape confirms current option'
   const delta = Date.parse(snoozeUntilRaw) - Date.now();
   expect(delta).toBeGreaterThan(23 * 60 * 60 * 1000);
   expect(delta).toBeLessThan(25 * 60 * 60 * 1000);
+});
+
+test('hide chooser Escape dismisses chooser without hiding card', async ({ page }) => {
+  const created = await createCard(page, `hide-escape-dismiss-${Date.now()}`);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  let hidePayload: Record<string, unknown> | null = null;
+  await page.route('**/api/items/hide', async (route, request) => {
+    if (!hidePayload && request.method() === 'POST') {
+      hidePayload = JSON.parse(request.postData() || '{}');
+    }
+    await route.continue();
+  });
+
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
+  await expect(page.locator('.hide-snooze-chooser')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.hide-snooze-chooser')).toBeHidden();
+
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  await page.waitForTimeout(250);
+  expect(hidePayload).toBeNull();
+
+  const cleanup = await page.request.post('/api/items/delete', { data: { id } });
+  expect(cleanup.ok()).toBeTruthy();
+});
+
+test('hide chooser outside click dismisses chooser without hiding card', async ({ page }) => {
+  const created = await createCard(page, `hide-outside-dismiss-${Date.now()}`);
+  const id = await created.getAttribute('data-id');
+  expect(id).toBeTruthy();
+
+  let hidePayload: Record<string, unknown> | null = null;
+  await page.route('**/api/items/hide', async (route, request) => {
+    if (!hidePayload && request.method() === 'POST') {
+      hidePayload = JSON.parse(request.postData() || '{}');
+    }
+    await route.continue();
+  });
+
+  await ensureFiltersTrayOpen(page);
+  await openActionDrawer(created);
+  await created.locator('.pin-action-drawer .pin-hide').click();
+  await expect(page.locator('.hide-snooze-chooser')).toBeVisible();
+  await page.locator('.app-title').click();
+  await expect(page.locator('.hide-snooze-chooser')).toBeHidden();
+
+  await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
+  await page.waitForTimeout(250);
+  expect(hidePayload).toBeNull();
+
+  const cleanup = await page.request.post('/api/items/delete', { data: { id } });
+  expect(cleanup.ok()).toBeTruthy();
 });
 
 test('hide chooser allows mouse selection of Skip snooze', async ({ page }) => {
@@ -1337,7 +1393,7 @@ test('hide failure keeps card visible and shows warning', async ({ page }) => {
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(created);
   await created.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
 
   await expect(page.locator('.canvas-warning')).toContainText('Unable to hide card. Please try again.');
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(1);
@@ -1365,7 +1421,7 @@ test('hide/unhide preserves stale state', async ({ page }) => {
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(staleCard);
   await staleCard.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
 
   await expect.poll(() => getHiddenCount(page)).toBe(initialCount + 1);
@@ -1405,7 +1461,7 @@ test('resurface acknowledgment degrades under strip pressure', async ({ page }) 
     await ensureFiltersTrayOpen(page);
     await openActionDrawer(staleCard);
     await staleCard.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+    await confirmHideChooserWithKey(page, 'Enter');
     await expect(page.locator(`.pin[data-id="${id}"]`)).toHaveCount(0);
     await expect.poll(() => getHiddenCount(page)).toBe(initialHiddenCount + 1);
 
@@ -1495,7 +1551,7 @@ test('system events do not move existing user-positioned cards', async ({ page }
   expect(systemCardId).toBeTruthy();
   await openActionDrawer(systemCard);
   await systemCard.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect(page.locator(`.pin[data-id="${systemCardId}"]`)).toHaveCount(0);
   await page.locator('#hidden-toggle').click();
   const hiddenItem = page.locator('.hidden-tray-item', { hasText: systemTitle }).first();
@@ -1529,7 +1585,7 @@ test('insertion policy is deterministic and never displaces existing cards', asy
     await ensureFiltersTrayOpen(page);
     await openActionDrawer(subjectCard);
     await subjectCard.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+    await confirmHideChooserWithKey(page, 'Enter');
     await expect(subjectCard).toHaveCount(0);
 
     await expect.poll(() => getHiddenCount(page)).toBe(hiddenCountBeforeHide + 1);
@@ -1784,6 +1840,50 @@ test('touch control stays explicit, toggles today state, and supports undo', asy
   await expect(created).toHaveAttribute('data-last-touched-day', '');
 });
 
+test('effective touch auto-opens activity log and idempotent re-touch does not reopen it', async ({ page }) => {
+  const created = await createCard(page, `touch-auto-log-${Date.now()}`, 1120, 260);
+  const touchButton = created.locator('.pin-touch');
+
+  await touchButton.click();
+  const popover = page.locator('.activity-log-popover');
+  await expect(popover).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+
+  await touchButton.click();
+  await expect(popover).toBeHidden();
+});
+
+test('touch keeps same-card activity log popover instance as-is when already open', async ({ page }) => {
+  const card = await createCard(page, `touch-same-popover-${Date.now()}`, 1090, 260);
+  const popover = await openActivityLogPopover(page, card);
+  const composer = popover.locator('.activity-log-popover__composer');
+  await composer.fill('draft stays on same card');
+
+  await card.locator('.pin-touch').click();
+
+  await expect(page.locator('.activity-log-popover')).toHaveCount(1);
+  await expect(page.locator('.activity-log-popover')).toBeVisible();
+  await expect(composer).toHaveValue('draft stays on same card');
+});
+
+test('touch switches single activity log popover instance to newly touched card', async ({ page }) => {
+  const cardA = await createCard(page, `touch-switch-a-${Date.now()}`, 1090, 210);
+  const cardB = await createCard(page, `touch-switch-b-${Date.now()}`, 1090, 420);
+
+  const popoverA = await openActivityLogPopover(page, cardA);
+  const composer = popoverA.locator('.activity-log-popover__composer');
+  await composer.fill('draft on a');
+
+  await cardB.locator('.pin-touch').click();
+
+  const popover = page.locator('.activity-log-popover');
+  await expect(popover).toHaveCount(1);
+  await expect(popover).toBeVisible();
+  await expect(popover.locator('.activity-log-popover__composer')).toHaveValue('');
+});
+
 test('stale emphasis remains visible for stale cards and stays off active cards', async ({ page }) => {
   const staleSeed = await createCard(page, `stale-${Date.now()}`, 220, 180);
   const staleSeedId = await staleSeed.getAttribute('data-id');
@@ -1958,7 +2058,7 @@ test('mutation failure logs include structured context for hide failures', async
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(created);
   await created.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect(page.locator('.canvas-warning')).toContainText('Unable to hide card');
   expect(failedOnce).toBeTruthy();
   expect(hasMutationLog(collected.logs, 'hide-pin', '/api/items/hide')).toBeTruthy();
@@ -2038,7 +2138,7 @@ test('mutation failure logs include structured context for unhide failures', asy
   await ensureFiltersTrayOpen(page);
   await openActionDrawer(created);
   await created.locator('.pin-action-drawer .pin-hide').click();
-  await page.keyboard.press('Escape');
+  await confirmHideChooserWithKey(page, 'Enter');
   await expect.poll(() => getHiddenCount(page)).toBeGreaterThan(0);
 
   let unhideFailed = false;
