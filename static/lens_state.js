@@ -10,7 +10,8 @@ export function createLensStateController({
 }) {
   const semanticContract = normalizeCenterSemantics(centerSemantics);
   const canonicalLensRatio = semanticContract ? semanticContract.lensRatio : 0.68;
-  let lens = readLensMode();
+  let staleActive = readStaleLensEnabled();
+  let scopeLens = 'all';
   let lensRatio = canonicalLensRatio;
   const lensExempt = new Set();
   let staleLensSnapshot = new Set();
@@ -43,28 +44,27 @@ export function createLensStateController({
     button.textContent = name[0].toUpperCase() + name.slice(1);
     button.onclick = () => {
       if (name === 'stale') {
-        setLensMode(lens === 'stale' ? 'all' : 'stale');
+        toggleStaleLens();
         return;
       }
-      setLensMode(name);
+      setScopeLens(name);
     };
     if (name === 'stale') lensWrap.appendChild(sliderWrap);
     lensWrap.appendChild(button);
   });
   filtersControls.appendChild(lensWrap);
 
-  function readLensMode() {
+  function readStaleLensEnabled() {
     try {
-      const stored = sessionStorage.getItem(LENS_MODE_STORAGE_KEY);
-      return stored === 'stale' ? 'stale' : 'all';
+      return sessionStorage.getItem(LENS_MODE_STORAGE_KEY) === 'stale';
     } catch (_err) {
-      return 'all';
+      return false;
     }
   }
 
   function persistLensMode() {
     try {
-      if (lens === 'stale') sessionStorage.setItem(LENS_MODE_STORAGE_KEY, 'stale');
+      if (staleActive) sessionStorage.setItem(LENS_MODE_STORAGE_KEY, 'stale');
       else sessionStorage.removeItem(LENS_MODE_STORAGE_KEY);
     } catch (_err) {}
   }
@@ -142,7 +142,7 @@ export function createLensStateController({
   }
 
   function syncStaleLensDom() {
-    if (lens !== 'stale') {
+    if (!staleActive) {
       restoreDetachedStalePins();
       return;
     }
@@ -158,12 +158,19 @@ export function createLensStateController({
     });
   }
 
-  function setLensMode(nextLens) {
-    lens = nextLens;
-    if (lens === 'stale') {
+  function setScopeLens(nextScopeLens) {
+    scopeLens = nextScopeLens;
+    renderButtons();
+    surface.querySelectorAll('.pin').forEach(applyDistanceStyle);
+    applyLens();
+    syncCanvasViewportRect();
+  }
+
+  function toggleStaleLens() {
+    staleActive = !staleActive;
+    if (staleActive) {
       captureStaleSnapshot();
     } else {
-      lensExempt.clear();
       staleLensSnapshot.clear();
       restoreDetachedStalePins();
     }
@@ -176,38 +183,36 @@ export function createLensStateController({
 
   function renderButtons() {
     document.querySelectorAll('.lens-btn').forEach((button) => {
-      button.classList.toggle('active', button.dataset.lens === lens);
+      if (button.dataset.lens === 'stale') {
+        button.classList.toggle('active', staleActive);
+        return;
+      }
+      button.classList.toggle('active', button.dataset.lens === scopeLens);
     });
     const slider = document.querySelector('.lens-slider-wrap');
-    if (slider) slider.hidden = (lens === 'all' || lens === 'stale');
+    if (slider) slider.hidden = (scopeLens === 'all');
     updateBoundaryCue(false);
   }
 
   function inLens(pin) {
-    if (lens === 'all') return true;
+    if (scopeLens === 'all') return true;
     const distance = pinDistanceFromCenter(pin);
     const cutoff = maxR() * lensRatio;
-    if (lens === 'center') return distance <= cutoff;
+    if (scopeLens === 'center') return distance <= cutoff;
     return distance > cutoff;
   }
 
   function isVisible(pin) {
     const id = pin.dataset.id;
-    let lensVisible = true;
-    if (lens !== 'all') {
-      if (lens === 'stale') lensVisible = staleLensSnapshot.has(id);
-      else lensVisible = lensExempt.has(id) || inLens(pin);
-    }
-    if (!lensVisible) return false;
+    const scopeVisible = (scopeLens === 'all') ? true : (lensExempt.has(id) || inLens(pin));
+    if (!scopeVisible) return false;
+    if (staleActive && !staleLensSnapshot.has(id)) return false;
     return additionalVisibilityPredicate(pin) !== false;
   }
 
   function applyLens() {
-    if (lens === 'stale') {
-      syncStaleLensDom();
-      return;
-    }
-    restoreDetachedStalePins();
+    if (staleActive) syncStaleLensDom();
+    else restoreDetachedStalePins();
     surface.querySelectorAll('.pin').forEach((pin) => {
       pin.style.display = isVisible(pin) ? '' : 'none';
     });
@@ -219,7 +224,7 @@ export function createLensStateController({
     surface.style.setProperty('--center-radius', radius + 'px');
     boundaryEl.style.width = (radius * 2) + 'px';
     boundaryEl.style.height = (radius * 2) + 'px';
-    const shouldShow = forceShow || dragHaloActive || (lens !== 'all' && lens !== 'stale');
+    const shouldShow = forceShow || dragHaloActive || (scopeLens !== 'all');
     boundaryEl.classList.toggle('show', shouldShow);
   }
 
@@ -241,7 +246,7 @@ export function createLensStateController({
     let bodySize = isCenterBand ? 11.7 : 10.7;
     let titleWeight = isCenterBand ? 660 : 560;
 
-    if (mode === 'focus' && lens === 'periphery' && !isCenterBand) {
+    if (mode === 'focus' && scopeLens === 'periphery' && !isCenterBand) {
       cardScale = Math.max(cardScale, 0.98);
       titleSize = Math.max(titleSize, 12.9);
       bodySize = Math.max(bodySize, 11.1);
@@ -283,7 +288,7 @@ export function createLensStateController({
   }
 
   function initialDisplayValue(pin, markSaved) {
-    return (lens === 'stale' ? isVisible(pin) : (!markSaved || isVisible(pin))) ? '' : 'none';
+    return (!markSaved || isVisible(pin)) ? '' : 'none';
   }
 
   function setAdditionalVisibilityPredicate(nextPredicate) {
@@ -297,7 +302,7 @@ export function createLensStateController({
     applyLens,
     captureStaleSnapshot,
     forgetPin,
-    getMode: () => lens,
+    getMode: () => (staleActive ? 'stale' : scopeLens),
     initialDisplayValue,
     isVisible,
     registerPin,
