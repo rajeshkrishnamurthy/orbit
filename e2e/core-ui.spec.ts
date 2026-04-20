@@ -1027,6 +1027,47 @@ test('stale lens shows only entry-time stale cards and refreshes on reload', asy
   expect(visible).toEqual([activeId!]);
 });
 
+test('stale lens composes with center/periphery scope without resetting scope', async ({ page }) => {
+  const centerTitle = `stale-scope-center-${Date.now()}`;
+  const peripheryTitle = `stale-scope-periphery-${Date.now()}`;
+
+  const centerPin = await createCard(page, centerTitle, 650, 340);
+  const peripheryPin = await createCard(page, peripheryTitle, 1120, 120);
+  const centerId = await centerPin.getAttribute('data-id');
+  const peripheryId = await peripheryPin.getAttribute('data-id');
+  expect(centerId).toBeTruthy();
+  expect(peripheryId).toBeTruthy();
+
+  ageCardInDb(centerId!, 8);
+  ageCardInDb(peripheryId!, 8);
+  await page.reload();
+
+  const centerReloaded = page.locator(`.pin[data-id="${centerId}"]`);
+  const peripheryReloaded = page.locator(`.pin[data-id="${peripheryId}"]`);
+  await expect(centerReloaded).toHaveAttribute('data-stale', 'true');
+  await expect(peripheryReloaded).toHaveAttribute('data-stale', 'true');
+
+  await ensureFiltersTrayOpen(page);
+  const centerLens = page.locator('.lens-btn[data-lens="center"]');
+  const peripheryLens = page.locator('.lens-btn[data-lens="periphery"]');
+  const staleLens = page.locator('.lens-btn[data-lens="stale"]');
+
+  await centerLens.click();
+  await staleLens.click();
+  await expect(centerLens).toHaveClass(/active/);
+  await expect(staleLens).toHaveClass(/active/);
+  let visible = await visiblePinIds(page);
+  expect(visible).toContain(centerId!);
+  expect(visible).not.toContain(peripheryId!);
+
+  await peripheryLens.click();
+  await expect(peripheryLens).toHaveClass(/active/);
+  await expect(staleLens).toHaveClass(/active/);
+  visible = await visiblePinIds(page);
+  expect(visible).toContain(peripheryId!);
+  expect(visible).not.toContain(centerId!);
+});
+
 test('card color change persists after reload', async ({ page }) => {
   const pin = await createCard(page, `color-${Date.now()}`, 1180, 240);
 

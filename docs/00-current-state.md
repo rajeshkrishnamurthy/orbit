@@ -1,7 +1,7 @@
 # Orbit — 00 Current State (Canonical Baseline)
 
-Last reviewed: 2026-04-06  
-Review mode: legacy-to-current consolidation (human-confirmed)  
+Last reviewed: 2026-04-20  
+Review mode: canonical refresh after card-people-map initiative intake  
 Confidence: **high** on confirmed sections, **medium** where implementation verification is still pending
 
 ---
@@ -25,6 +25,9 @@ Primary evidence roots:
 - `docs/resurface-count/02-feature-spec.md`
 - `docs/chrome-context/02-feature-spec.md`
 - `docs/chrome-context/03-feature-spec-patch-tooltip.md`
+- `docs/card-people-map/01-discovery-handoff.md`
+- `docs/card-people-map/02-feature-spec.md`
+- `docs/card-people-map/03-spec-readiness-signoff.json`
 
 ---
 
@@ -127,6 +130,8 @@ Card action UI:
    - Current behavior is badge/state inside Hidden tray cards.
 3. **Deprecated:** treating web as primary end-user surface.  
    - Web is internal verification surface.
+4. **Not currently true:** card-people mapping/filtering is already shipped in product behavior.  
+   - Current status is specification-complete and implementation-ready under `docs/card-people-map/`, but not yet promoted as shipped truth in this canonical baseline.
 
 ---
 
@@ -134,6 +139,7 @@ Card action UI:
 
 1. Verify exact UI wording/token for days-left badge in Hidden tray (display format only; semantics already locked). (confidence: medium)
 2. Verify whether any implementation drift exists from locked behavior in latest build artifacts/tests. (confidence: medium)
+3. Implement and verify the `card-people-map` baseline (person-to-card mapping + single-select people filter); on completion, fold accepted behavior into Section 2 as currently true. (confidence: medium)
 
 ---
 
