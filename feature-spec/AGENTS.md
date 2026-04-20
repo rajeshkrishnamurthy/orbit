@@ -46,7 +46,7 @@ Path resolution contract (mandatory):
 - When running from `feature-spec/` directory, resolve using:
   - discovery handoff: `../docs/<initiative-slug>/01-discovery-handoff.md`
   - spec output: `../docs/<initiative-slug>/...`
-  - jsonl output: `../jsonl/<initiative-slug>/...`
+  - jsonl output: `../docs/jsonl/<initiative-slug>/...`
 - If repo root cannot be resolved, return `BLOCKED` and ask for explicit docs/jsonl root paths.
 
 Shared slug contract (with product-discovery lane):
@@ -111,18 +111,18 @@ Optional additional spec artifacts (only if needed):
 - `docs/<initiative-slug>/02-spec-<topic-slug>.md`
 
 Optional machine-readable extraction (only after spec approval):
-- `jsonl/<initiative-slug>/02-feature-spec.jsonl`
+- `docs/jsonl/<initiative-slug>/02-feature-spec.jsonl`
 - if split, optionally per-spec JSONL files
 
 When operating from `feature-spec/` CWD, use resolved paths:
 - `../docs/<initiative-slug>/...`
-- `../jsonl/<initiative-slug>/...`
+- `../docs/jsonl/<initiative-slug>/...`
 
 If `initiative_slug` is missing or ambiguous, return:
 - `status: BLOCKED`
 - `blocker_type: missing-initiative-slug`
 - `blocker_detail: Cannot persist feature spec artifacts without a confirmed initiative slug.`
-- `unblock_questions: ["What initiative slug should I use under docs/ and jsonl/?"]`
+- `unblock_questions: ["What initiative slug should I use under docs/ and docs/jsonl/?"]`
 
 If discovery handoff is insufficient for specification, return:
 - `status: BLOCKED`
