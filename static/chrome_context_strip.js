@@ -52,11 +52,11 @@ export function createChromeContextStripController({
     render();
   }
 
-  function createEntryButton(entry, className, labelClass, countClass) {
+  function createEntryButton(entry, className, labelClass, countClass, tooltipText) {
     const btn = documentRef.createElement('button');
     btn.type = 'button';
     btn.className = className;
-    btn.title = entry.contextTitle;
+    btn.title = tooltipText || entry.contextTitle;
 
     const label = documentRef.createElement('span');
     label.className = labelClass;
@@ -87,7 +87,8 @@ export function createChromeContextStripController({
 
     for (const entry of visibleEntries) {
       const className = entry.isActive ? 'chrome-context-strip__pill chrome-context-strip__pill--active' : 'chrome-context-strip__pill';
-      const pill = createEntryButton(entry, className, 'chrome-context-strip__pill-label', 'chrome-context-strip__pill-count');
+      const tooltipText = `Total: ${entry.visibleCount}; Stale : ${entry.staleCount}`;
+      const pill = createEntryButton(entry, className, 'chrome-context-strip__pill-label', 'chrome-context-strip__pill-count', tooltipText);
       container.appendChild(pill);
     }
 

@@ -42,6 +42,32 @@ test('context strip keeps fixed pill order when active context changes', async (
   expect(labelsAfter).toEqual(labelsBefore);
 });
 
+test('context pill hover tooltip uses exact total/stale format and updates per pill', async ({ page }) => {
+  await page.goto('/');
+
+  const ctxA = await createContext(page, 'Tooltip A');
+  const ctxB = await createContext(page, 'Tooltip B');
+  await page.reload();
+
+  const pillA = page.locator('.chrome-context-strip__pill', { hasText: ctxA.title });
+  const pillB = page.locator('.chrome-context-strip__pill', { hasText: ctxB.title });
+
+  await expect(pillA).toBeVisible();
+  await expect(pillB).toBeVisible();
+
+  const countA = await pillA.locator('.chrome-context-strip__pill-count').innerText();
+  const [totalA, staleA] = countA.split('/');
+  await pillA.hover();
+  await expect(pillA).toHaveAttribute('title', `Total: ${totalA}; Stale : ${staleA}`);
+
+  const beforeURL = page.url();
+  const countB = await pillB.locator('.chrome-context-strip__pill-count').innerText();
+  const [totalB, staleB] = countB.split('/');
+  await pillB.hover();
+  await expect(pillB).toHaveAttribute('title', `Total: ${totalB}; Stale : ${staleB}`);
+  await expect(page).toHaveURL(beforeURL);
+});
+
 test('chrome context strip supports overflow and one-click context switching', async ({ page }) => {
   await page.goto('/');
 

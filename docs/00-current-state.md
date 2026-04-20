@@ -24,6 +24,7 @@ Primary evidence roots:
 - `docs/touch-log/02-feature-spec.md`
 - `docs/resurface-count/02-feature-spec.md`
 - `docs/chrome-context/02-feature-spec.md`
+- `docs/chrome-context/03-feature-spec-patch-tooltip.md`
 
 ---
 
@@ -68,6 +69,8 @@ Card action UI:
 8. Count semantics are fixed:
    - `visible_count` excludes hidden cards
    - `stale_count` counts stale cards among visible (non-hidden) cards only
+9. Context pills show hover tooltip with mapped counts:
+   - `Total: <visible_count>; Stale : <stale_count>`
 
 ### 2.5 Hidden + snooze + resurface behavior (confidence: high)
 1. Hidden tray + snooze/resurface behavior is current.

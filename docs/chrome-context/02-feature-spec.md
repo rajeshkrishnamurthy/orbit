@@ -11,6 +11,8 @@ Source: `docs/chrome-context/01-discovery-handoff.md` + `docs/00-current-state.m
 
 Deliver a center-top chrome context strip that is visible from any context canvas and shows per-context count-only status in compact `visible/stale` format. Users can switch context in one click from strip entries.
 
+Add hover tooltip on context entries to improve quick interpretation without reading compact fractions.
+
 V1 includes deterministic overflow handling:
 - show up to 8 entries total in strip
 - if total contexts > 8: show 7 context pills + 1 overflow entry (`+N`)
@@ -29,6 +31,7 @@ V1 excludes keyboard interaction for overflow list.
 4. One-click context switching from pills and overflow list entries.
 5. Overflow behavior for >8 contexts using `+N` entry and compact list.
 6. Single-line label truncation with ellipsis and stable width behavior under compression.
+7. Hover tooltip on context pills with explicit count wording.
 
 ### Out of scope (V1)
 1. Context creation/edit/delete flows.
@@ -72,6 +75,11 @@ V1 excludes keyboard interaction for overflow list.
    - context label (single line, truncation with ellipsis)
    - compact count text `visible/stale` (example `12/3`)
 2. Counts are non-negative integers.
+3. On pointer hover over a context pill, show tooltip text in exact format:
+   - `Total: <count_total>; Stale : <count_stale>`
+4. Tooltip values map as:
+   - `count_total = visible_count`
+   - `count_stale = stale_count`
 
 ### FR-3: Count definitions
 1. `visible_count(context)` = number of cards in the context canvas that are not hidden.
@@ -158,6 +166,7 @@ No changes to persisted card/context schema are required by this initiative.
 8. With exactly 8 contexts, no `+N` appears.
 9. V1 provides no keyboard interaction requirement for overflow list (pointer interaction succeeds).
 10. No action in strip/overflow mutates card placement or card semantics beyond context navigation.
+11. Hovering a context pill shows tooltip text exactly `Total: <count_total>; Stale : <count_stale>` with values matching that pill’s counts.
 
 ---
 
@@ -202,3 +211,4 @@ No changes to persisted card/context schema are required by this initiative.
 1. `low-impact` — Case-insensitive alphabetical sort is acceptable for context title ordering implementation detail.
 2. `low-impact` — Stable tie-break by `context_id` is acceptable to prevent reorder jitter for identical titles.
 3. `low-impact` — Loading-safe placeholder rendering is implementation-defined as long as invalid counts are not shown and final counts converge correctly.
+4. `low-impact` — Tooltip requirement applies to context pills in the strip (not additionally specified for overflow-list rows in this patch).

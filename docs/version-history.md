@@ -33,7 +33,7 @@ Last updated: 2026-04-06
 - **Scope:** Card interaction flow (touch + activity-log assist).
 - **Source(s):**
   - `docs/touch-log/02-feature-spec.md`
-  - `jsonl/touch-log/02-feature-spec.jsonl`
+  - `docs/jsonl/touch-log/02-feature-spec.jsonl`
   - reflected in canonical: `docs/00-current-state.md` (sections 2.6 and 2.8)
 - **Confidence:** High
 
@@ -44,8 +44,29 @@ Last updated: 2026-04-06
 - **Source(s):**
   - `docs/resurface-count/01-discovery-handoff.md`
   - `docs/resurface-count/02-feature-spec.md`
-  - `jsonl/resurface-count/02-feature-spec.jsonl`
+  - `docs/jsonl/resurface-count/02-feature-spec.jsonl`
   - reflected in canonical: `docs/00-current-state.md` (section 2.5)
+- **Confidence:** High
+
+### Chrome context strip with cross-context counts and one-click switching (chrome-context)
+- **Change:** Added center-top chrome context strip visible from any context canvas, with per-context `visible/stale` counts, deterministic ordering, and deterministic overflow (`7 + +N` when contexts exceed capacity).
+- **Product impact:** Users can scan cross-context workload/staleness and jump contexts in one click without returning to context home first.
+- **Scope:** Chrome context navigation and visibility surface.
+- **Source(s):**
+  - `docs/chrome-context/01-discovery-handoff.md`
+  - `docs/chrome-context/02-feature-spec.md`
+  - `docs/jsonl/chrome-context/02-feature-spec.jsonl`
+  - reflected in canonical: `docs/00-current-state.md` (section 2.4)
+- **Confidence:** High
+
+### Chrome context pill tooltip patch
+- **Change:** Added hover tooltip on context pills with exact mapped count format: `Total: <visible_count>; Stale : <stale_count>`.
+- **Product impact:** Improves count clarity without changing navigation or count semantics.
+- **Scope:** Chrome context strip micro-UX enhancement.
+- **Source(s):**
+  - `docs/chrome-context/03-feature-spec-patch-tooltip.md`
+  - `docs/jsonl/chrome-context/03-feature-spec-patch-tooltip.jsonl`
+  - reflected in canonical: `docs/00-current-state.md` (section 2.4)
 - **Confidence:** High
 
 ---
