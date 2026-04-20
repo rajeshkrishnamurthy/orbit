@@ -6,6 +6,10 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+  statuses: write
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -25,3 +29,32 @@ jobs:
 
       - name: Run strict Go lint gate
         run: ./scripts/lint-strict.sh
+
+  report-required-status:
+    name: report required status context
+    needs: lint
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish go-lint-strict / lint status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const stateMap = {
+              success: 'success',
+              failure: 'failure',
+              cancelled: 'error',
+              skipped: 'error',
+            };
+            const lintResult = '${{ needs.lint.result }}';
+            const state = stateMap[lintResult] || 'error';
+            const sha = context.payload.pull_request?.head?.sha || context.sha;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha,
+              state,
+              context: 'go-lint-strict / lint',
+              description: `go-lint-strict lint result: ${lintResult}`,
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            });
