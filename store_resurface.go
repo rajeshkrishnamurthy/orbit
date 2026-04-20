@@ -137,7 +137,7 @@ WHERE item_id IN (
 
 func (s *Store) resurfacedItemsForContextWithContext(ctx context.Context, contextID string) ([]Item, error) {
 	rows, queryErr := s.queryContext(ctx, `
-SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.created_at,i.updated_at
+SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.person_ids,i.created_at,i.updated_at
 FROM resurfaced_items r
 JOIN items i ON i.id = r.item_id
 WHERE r.context_id = ? AND i.hidden = 1 AND i.completed = 0
@@ -152,10 +152,16 @@ ORDER BY r.resurfaced_at ASC
 	ids := make([]string, 0, 8)
 	for rows.Next() {
 		var it Item
+		var personIDsRaw string
 		var created, updated string
-		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated); scanErr != nil {
 			return nil, fmt.Errorf("scan resurfaced item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
+		personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
+		if parsePersonIDsErr != nil {
+			return nil, fmt.Errorf("parse resurfaced item person_ids for context %q: %w", contextOrDefault(contextID), parsePersonIDsErr)
+		}
+		it.PersonIDs = personIDs
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}

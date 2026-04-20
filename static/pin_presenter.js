@@ -144,6 +144,11 @@ export function createPinPresenter({documentRef, mode}) {
     if (typeof data.active === 'boolean') pin.dataset.active = data.active ? 'true' : 'false';
     if (typeof data.stale === 'boolean') pin.dataset.stale = data.stale ? 'true' : 'false';
     if (typeof data.inCenter === 'boolean') pin.dataset.inCenter = data.inCenter ? 'true' : 'false';
+    if (Array.isArray(data.personIds)) {
+      pin.dataset.personIds = JSON.stringify(data.personIds);
+      const countEl = pin.querySelector('.pin-people-indicator__count');
+      if (countEl) countEl.textContent = String(data.personIds.length);
+    }
     syncTouchState(pin);
   }
 

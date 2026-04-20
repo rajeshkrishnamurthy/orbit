@@ -15,6 +15,9 @@ const ENDPOINTS = {
   itemsDelete: '/api/items/delete',
   itemsActivityLogAdd: '/api/items/activity-log/add',
   itemsActivityLogLatest: '/api/items/activity-log/latest',
+  peopleList: '/api/people/list',
+  peopleCreate: '/api/people/create',
+  peopleRename: '/api/people/rename',
   contextsDelete: '/api/contexts/delete',
   itemsComplete: '/api/items/complete',
   itemsTouch: '/api/items/touch',
@@ -169,6 +172,51 @@ export function createMutationTransport({ fetchImpl } = {}) {
         return { ok: true, status, endpoint: ENDPOINTS.itemsActivityLogAdd, data };
       } catch (err) {
         return { ok: false, status: null, endpoint: ENDPOINTS.itemsActivityLogAdd, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async listPeople() {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleList, postBody({}));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleList, error: detail || `people list failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleList, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleList, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async createPerson({ displayName }) {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleCreate, postBody({ displayName }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleCreate, error: detail || `create person failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleCreate, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleCreate, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async renamePerson({ id, displayName }) {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleRename, postBody({ id, displayName }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleRename, error: detail || `rename person failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleRename, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleRename, error: mutationErrorSummary(err) };
       }
     },
 

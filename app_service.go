@@ -27,6 +27,7 @@ type HomeResponse struct {
 	Items               []Item
 	ResurfacedItems     []Item
 	Contexts            []Context
+	People              []Person
 	ContextStripEntries []ContextStripEntry
 	HiddenCount         int
 	Mode                string
@@ -60,6 +61,10 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
+	people, err := s.store.listPeopleWithContext(ctx)
+	if err != nil {
+		return HomeResponse{}, err
+	}
 	if markErr := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); markErr != nil {
 		return HomeResponse{}, markErr
 	}
@@ -78,6 +83,7 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	return HomeResponse{
 		Items:               items,
 		ResurfacedItems:     resurfacedItems,
+		People:              people,
 		ContextStripEntries: stripEntries,
 		HiddenCount:         hiddenN,
 		Mode:                "focus",

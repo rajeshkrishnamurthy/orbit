@@ -1,0 +1,8 @@
+{
+  "initiative_slug": "card-people-map",
+  "spec_doc_path": "docs/card-people-map/02-feature-spec.md",
+  "ambiguities_jsonl_path": "docs/card-people-map/02-feature-spec.jsonl",
+  "readiness": "READY_FOR_IMPLEMENTATION",
+  "unresolved_high_medium_count": 0,
+  "generated_at": "2026-04-20T07:19:45.479425Z"
+}

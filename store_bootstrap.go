@@ -34,9 +34,19 @@ CREATE TABLE IF NOT EXISTS items (
   hidden INTEGER NOT NULL DEFAULT 0,
   slipping INTEGER NOT NULL DEFAULT 0,
   completed INTEGER NOT NULL DEFAULT 0,
+  person_ids TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(context_id) REFERENCES contexts(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS people (
+  id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (length(trim(display_name)) > 0),
+  CHECK (length(trim(normalized_name)) > 0)
 );
 CREATE TABLE IF NOT EXISTS touch_facts (
   card_id TEXT NOT NULL,
@@ -200,6 +210,7 @@ func (s *Store) ensureSchema() error {
 		{column: "hidden", stmt: `ALTER TABLE items ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0`},
 		{column: "slipping", stmt: `ALTER TABLE items ADD COLUMN slipping INTEGER NOT NULL DEFAULT 0`},
 		{column: "completed", stmt: `ALTER TABLE items ADD COLUMN completed INTEGER NOT NULL DEFAULT 0`},
+		{column: "person_ids", stmt: `ALTER TABLE items ADD COLUMN person_ids TEXT NOT NULL DEFAULT '[]'`},
 	}
 	for _, alter := range alterStmts {
 		if err := s.ensureItemsColumn(alter.column, alter.stmt); err != nil {

@@ -13,6 +13,7 @@ void (async () => {
     {createResurfaceShelfController},
     {createHideSnoozeChoiceController},
     {createChromeContextStripController},
+    {createPinPeopleController}, {createPeopleFilterController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
@@ -26,7 +27,7 @@ void (async () => {
     import('/static/undo_ack_state.js'),
     import('/static/resurface_shelf_state.js'),
     import('/static/hide_snooze_choice_state.js'),
-    import('/static/chrome_context_strip.js'),
+    import('/static/chrome_context_strip.js'), import('/static/pin_people_state.js'), import('/static/people_filter_state.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
@@ -41,6 +42,7 @@ void (async () => {
   const items = window.__ITEMS__ || [];
   const resurfacedItems = window.__RESURFACED_ITEMS__ || [];
   const initialContextStripEntries = window.__CONTEXT_STRIP_ENTRIES__ || [];
+  const initialPeople = window.__PEOPLE__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const centerSemantics = readCenterSemantics();
@@ -57,7 +59,7 @@ void (async () => {
   let pinActivityLogState = null;
   let resurfaceShelfState = null;
   let hideSnoozeChoiceState = null;
-  let chromeContextStripState = null;
+  let chromeContextStripState = null; let pinPeopleState = null; let peopleFilterState = null;
 
   function readCenterSemantics() {
     const candidates = [
@@ -251,6 +253,8 @@ void (async () => {
     centerSemantics,
     syncCanvasViewportRect,
   });
+  pinPeopleState = createPinPeopleController({documentRef: document, layoutShell, surface, getTransport: getMutationTransport, showCanvasWarning, closeActivityLogPopover, savePin, onPeopleUpdated(people) { if (peopleFilterState && typeof peopleFilterState.refreshPeople === 'function') void peopleFilterState.refreshPeople(people); }});
+  peopleFilterState = createPeopleFilterController({documentRef: document, layoutShell, filtersControls, surface, mode, getTransport: getMutationTransport, lensState, initialPeople, showCanvasWarning});
 
   hiddenTrayState = createHiddenTrayController({
     layoutShell,
@@ -387,7 +391,8 @@ void (async () => {
         hideSnoozeChoiceState.open(pin, options);
       },
       delete: pinDestructiveController.deletePinImmediate,
-      activityLog: pinActivityLogState.open,
+      activityLog(pin, options) { if (pinPeopleState) pinPeopleState.close(); pinActivityLogState.open(pin, options); },
+      people(pin, options) { if (pinPeopleState) pinPeopleState.open(pin, options); },
       touch: pinTouchCompleteController.touchPinImmediate,
       complete: pinTouchCompleteController.completePinImmediate,
       discardIfEmpty: pinDestructiveController.discardIfEmpty,
@@ -416,6 +421,7 @@ void (async () => {
 
   function applyLens(){
     lensState.applyLens();
+    if (peopleFilterState) peopleFilterState.syncEmptyState();
   }
 
   function applyDistanceStyle(pin){
@@ -486,6 +492,7 @@ void (async () => {
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
       color: pin.dataset.color || 'var(--c1)',
+      personIds: pinPeopleState ? pinPeopleState.readPinPersonIDs(pin) : [],
       slipping: pin.dataset.slipping === 'true',
       completed: pin.dataset.state === 'completed'
     };
@@ -559,10 +566,8 @@ void (async () => {
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     if (ev.defaultPrevented) return;
-    if (pinActivityLogState && pinActivityLogState.isOpen()) {
-      closeActivityLogPopover();
-      return;
-    }
+    if (pinActivityLogState && pinActivityLogState.isOpen()) { closeActivityLogPopover(); return; }
+    if (pinPeopleState && pinPeopleState.isOpen()) { pinPeopleState.close(); return; }
     if (hiddenTrayState.isOpen()) {
       closeHiddenTray();
       return;
@@ -574,7 +579,9 @@ void (async () => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
     if (chromeContextStripState) chromeContextStripState.handleGlobalPointerDown(target);
-    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity')) return;
+    if (peopleFilterState) peopleFilterState.handleOutsidePointer(target);
+    if (pinPeopleState) pinPeopleState.handleOutsidePointer(target);
+    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity') || target.closest('.people-popover') || target.closest('.pin-people-indicator')) return;
     if (target.closest('.sw')) {
       closeHiddenTray();
       return;
@@ -592,12 +599,13 @@ void (async () => {
     if (outsideTrayClick) closeHiddenTray();
     const outsideActivityLog = pinActivityLogState && pinActivityLogState.isOpen() && !target.closest('.activity-log-popover') && !target.closest('.pin-activity');
     if (outsideActivityLog) closeActivityLogPopover();
-    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm') || target.closest('.activity-log-popover')) return;
+    if (pinPeopleState) pinPeopleState.handleOutsidePointer(target);
+    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.people-popover')) return;
     if (outsideTrayClick) return;
     const rect = getCanvasViewportRect();
     const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(rect.height - 90, e.clientY - rect.top));
-    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
+    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), personIds: [], slipping: false}, true, false);
     e.preventDefault();
   });
 

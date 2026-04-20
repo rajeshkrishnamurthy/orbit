@@ -182,6 +182,26 @@ async function openActivityLogPopover(page: Page, pin: Locator): Promise<Locator
   return popover;
 }
 
+async function pinByTitle(page: Page, title: string): Promise<Locator> {
+  const pins = page.locator('.pin');
+  const count = await pins.count();
+  for (let i = 0; i < count; i++) {
+    const pin = pins.nth(i);
+    const value = await pin.locator('.pin-title input').inputValue();
+    if (value === title) return pin;
+  }
+  throw new Error(`pin with title ${title} not found`);
+}
+
+async function openPeoplePopover(page: Page, pin: Locator): Promise<Locator> {
+  const indicator = pin.locator('.pin-people-indicator');
+  await expect(indicator).toBeVisible();
+  await indicator.click();
+  const popover = page.locator('.people-popover');
+  await expect(popover).toBeVisible();
+  return popover;
+}
+
 async function confirmHideChooserWithKey(page: Page, key: 'Enter' | 'Escape' = 'Escape'): Promise<void> {
   const chooser = page.locator('.hide-snooze-chooser');
   await expect(chooser).toBeVisible();
@@ -2341,6 +2361,72 @@ test('card note height increases from one line to two lines', async ({ page }) =
   expect(oneLineHeight).toBeGreaterThanOrEqual(18);
   expect(multiLineHeight).toBeLessThanOrEqual(36);
   expect(multiLineHeight).toBeGreaterThanOrEqual(oneLineHeight);
+});
+
+test('people mapping supports create+attach and single-select people filtering', async ({ page }) => {
+  const firstTitle = `people-a-${Date.now()}`;
+  const secondTitle = `people-b-${Date.now()}`;
+  const thirdTitle = `people-c-${Date.now()}`;
+
+  await createCard(page, firstTitle, 940, 610);
+  await createCard(page, secondTitle, 180, 610);
+  await createCard(page, thirdTitle, 300, 610);
+
+  const firstPin = await pinByTitle(page, firstTitle);
+  const secondPin = await pinByTitle(page, secondTitle);
+  const thirdPin = await pinByTitle(page, thirdTitle);
+
+  let peoplePopover = await openPeoplePopover(page, firstPin);
+  const firstSearch = peoplePopover.locator('.people-popover__search');
+  await firstSearch.fill('Sam Lee');
+  await firstSearch.press('Enter');
+  await expect(firstPin.locator('.pin-people-indicator__count')).toHaveText('1');
+  await expect(firstSearch).toHaveValue('');
+
+  peoplePopover = await openPeoplePopover(page, secondPin);
+  await peoplePopover.locator('.people-popover__search').fill('Sam');
+  await peoplePopover.locator('.people-popover__option', { hasText: 'Sam Lee' }).click();
+  await expect(secondPin.locator('.pin-people-indicator__count')).toHaveText('1');
+  await expect(thirdPin.locator('.pin-people-indicator__count')).toHaveText('0');
+
+  await page.locator('.people-filter__pill').click();
+  const filterPopover = page.locator('.people-filter__popover');
+  await expect(filterPopover).toBeVisible();
+  await filterPopover.locator('.people-filter__option', { hasText: 'Sam Lee' }).click();
+
+  await expect(page.locator('.people-filter__pill')).toContainText('People: Sam Lee');
+  const visibleAfterFilter = await visiblePinIds(page);
+  const firstID = await firstPin.getAttribute('data-id');
+  const secondID = await secondPin.getAttribute('data-id');
+  const thirdID = await thirdPin.getAttribute('data-id');
+  expect(firstID).toBeTruthy();
+  expect(secondID).toBeTruthy();
+  expect(thirdID).toBeTruthy();
+  expect(visibleAfterFilter).toContain(firstID!);
+  expect(visibleAfterFilter).toContain(secondID!);
+  expect(visibleAfterFilter).not.toContain(thirdID!);
+
+  await page.locator('.people-filter__pill').click();
+  await filterPopover.locator('.people-filter__clear').click();
+  await expect(page.locator('.people-filter__pill')).toHaveText('People');
+});
+
+test('people popup remains accessible near bottom edge', async ({ page }) => {
+  const title = `people-edge-${Date.now()}`;
+  const pin = await createCard(page, title, 980, 700);
+  const popover = await openPeoplePopover(page, pin);
+
+  const popoverBox = await popover.boundingBox();
+  const viewport = page.viewportSize();
+  expect(popoverBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  const popoverBottom = popoverBox!.y + popoverBox!.height;
+  expect(popoverBottom).toBeLessThanOrEqual(viewport!.height - 2);
+
+  const search = popover.locator('.people-popover__search');
+  await search.fill('Edge Person');
+  await search.press('Enter');
+  await expect(pin.locator('.pin-people-indicator__count')).toHaveText('1');
 });
 
 test('center cards render larger than periphery cards', async ({ page }) => {
