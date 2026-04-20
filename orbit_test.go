@@ -952,6 +952,7 @@ func TestHandlersRejectWrongMethodAndInvalidPayload(t *testing.T) {
 		{name: "delete item missing id 400", h: app.deleteItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "complete item missing id 400", h: app.completeItemAPI, method: http.MethodPost, body: `{}`, code: http.StatusBadRequest},
 		{name: "hide item missing id 400", h: app.hideItemAPI, method: http.MethodPost, body: `{"contextId":"main-orbit"}`, code: http.StatusBadRequest},
+		{name: "refresh foreground get 405", h: app.refreshForegroundAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "add activity log get 405", h: app.addActivityLogAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
 		{name: "add activity log missing itemId 400", h: app.addActivityLogAPI, method: http.MethodPost, body: `{"body":"x"}`, code: http.StatusBadRequest},
 		{name: "latest activity log get 405", h: app.latestActivityLogAPI, method: http.MethodGet, body: "", code: http.StatusMethodNotAllowed},
@@ -972,6 +973,67 @@ func TestHandlersRejectWrongMethodAndInvalidPayload(t *testing.T) {
 				t.Fatalf("expected %d, got %d, body=%s", tc.code, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestRefreshForegroundAPIReturnsRecomputedStatesForCurrentContext(t *testing.T) {
+	s, _ := newTestStore(t)
+	app := &App{store: s}
+
+	ctxA := "t_ctx_foreground_a"
+	ctxB := "t_ctx_foreground_b"
+	for _, c := range []Context{
+		{ID: ctxA, Title: "Context A", SubNote: "", X: 400, Y: 260, Color: "var(--c1)"},
+		{ID: ctxB, Title: "Context B", SubNote: "", X: 420, Y: 280, Color: "var(--c2)"},
+	} {
+		if err := s.upsertContext(c); err != nil {
+			t.Fatalf("upsertContext %s: %v", c.ID, err)
+		}
+	}
+
+	itemA := "t_foreground_item_a"
+	itemB := "t_foreground_item_b"
+	if err := s.update(Item{ID: itemA, ContextID: ctxA, Title: "A", SubNote: "", X: 100, Y: 100, Color: "var(--c1)"}); err != nil {
+		t.Fatalf("seed item A: %v", err)
+	}
+	if err := s.update(Item{ID: itemB, ContextID: ctxB, Title: "B", SubNote: "", X: 120, Y: 120, Color: "var(--c2)"}); err != nil {
+		t.Fatalf("seed item B: %v", err)
+	}
+
+	yesterday := time.Now().In(time.Local).AddDate(0, 0, -1).Format("2006-01-02")
+	now := time.Now().In(time.Local).Format(time.RFC3339Nano)
+	if _, err := s.db.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, itemA, yesterday, now); err != nil {
+		t.Fatalf("insert touch fact for item A: %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO touch_facts(card_id,local_day,created_at) VALUES(?,?,?)`, itemB, localDayString(time.Now()), now); err != nil {
+		t.Fatalf("insert touch fact for item B: %v", err)
+	}
+
+	rr := postJSON(t, app.refreshForegroundAPI, map[string]any{"contextId": ctxA})
+	assertJSONResponse(t, rr, http.StatusOK)
+	resp := mustDecodeJSON[struct {
+		OK    bool   `json:"ok"`
+		Items []Item `json:"items"`
+	}](t, rr)
+	if !resp.OK {
+		t.Fatalf("expected ok=true")
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected exactly 1 item for context %q, got %d", ctxA, len(resp.Items))
+	}
+	if resp.Items[0].ID != itemA {
+		t.Fatalf("expected item %q in refresh response, got %q", itemA, resp.Items[0].ID)
+	}
+	if resp.Items[0].TouchedToday {
+		t.Fatalf("expected touchedToday=false for item touched yesterday, got true")
+	}
+
+	rrInvalid := httptest.NewRecorder()
+	reqInvalid := httptest.NewRequest(http.MethodPost, "/api/items/refresh-foreground", strings.NewReader("{"))
+	reqInvalid.Header.Set("Content-Type", "application/json")
+	app.refreshForegroundAPI(rrInvalid, reqInvalid)
+	if rrInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid json, got %d", rrInvalid.Code)
 	}
 }
 
@@ -2652,6 +2714,94 @@ func TestHomeUnknownContextReturns500WithoutPanic(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "focus|") {
 		t.Fatalf("error path must not render focus template payload: %s", rr.Body.String())
+	}
+}
+
+type contextStripStatsEntry struct {
+	ContextID string `json:"contextId"`
+	Visible   int    `json:"visibleCount"`
+	Stale     int    `json:"staleCount"`
+	IsActive  bool   `json:"isActive"`
+}
+
+func seedContextForStripTest(t *testing.T, s *Store, id, title string) {
+	t.Helper()
+	if err := s.upsertContext(Context{ID: id, Title: title, X: 560, Y: 320, Color: "var(--c1)"}); err != nil {
+		t.Fatalf("seed context %q: %v", id, err)
+	}
+}
+
+func seedItemForStripTest(t *testing.T, s *Store, id, contextID string, x, y float64) {
+	t.Helper()
+	if err := s.update(Item{ID: id, ContextID: contextID, Title: id, X: x, Y: y, Color: "var(--c2)"}); err != nil {
+		t.Fatalf("seed item %q: %v", id, err)
+	}
+}
+
+func decodeContextStripStatsEntries(t *testing.T, rr *httptest.ResponseRecorder) []contextStripStatsEntry {
+	t.Helper()
+	var resp struct {
+		OK      bool                     `json:"ok"`
+		Entries []contextStripStatsEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v body=%q", err, rr.Body.String())
+	}
+	if !resp.OK {
+		t.Fatalf("expected ok=true response, got body=%s", rr.Body.String())
+	}
+	return resp.Entries
+}
+
+func contextStripEntryIndex(entries []contextStripStatsEntry, contextID string) int {
+	for i, entry := range entries {
+		if entry.ContextID == contextID {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestContextStripStatsAPIProvidesOrderedCounts(t *testing.T) {
+	app, s := newTestApp(t)
+
+	seedContextForStripTest(t, s, "ctx-alpha-2", "alpha")
+	seedContextForStripTest(t, s, "ctx-alpha-1", "Alpha")
+	seedContextForStripTest(t, s, "ctx-zeta", "Zeta")
+
+	seedItemForStripTest(t, s, "ctx-zeta-hidden", "ctx-zeta", 980, 560)
+	if err := s.hideWithContext(context.Background(), "ctx-zeta-hidden", "ctx-zeta"); err != nil {
+		t.Fatalf("hide seeded item: %v", err)
+	}
+	seedItemForStripTest(t, s, "ctx-zeta-visible", "ctx-zeta", 980, 560)
+
+	seedItemForStripTest(t, s, "ctx-alpha-stale", "ctx-alpha-1", 980, 560)
+	if _, err := s.db.Exec(`UPDATE items SET created_at=?, updated_at=? WHERE id=?`, time.Now().AddDate(0, 0, -6).Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), "ctx-alpha-stale"); err != nil {
+		t.Fatalf("force stale created_at: %v", err)
+	}
+
+	rr := postJSON(t, app.contextStripStatsAPI, map[string]any{"contextId": "ctx-zeta"})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	entries := decodeContextStripStatsEntries(t, rr)
+	if len(entries) < 3 {
+		t.Fatalf("expected at least 3 entries, got %d", len(entries))
+	}
+	zeta := contextStripEntryIndex(entries, "ctx-zeta")
+	alpha1 := contextStripEntryIndex(entries, "ctx-alpha-1")
+	alpha2 := contextStripEntryIndex(entries, "ctx-alpha-2")
+	if zeta == -1 || alpha1 == -1 || alpha2 == -1 {
+		t.Fatalf("missing expected entries in response: %+v", entries)
+	}
+	if !entries[zeta].IsActive || entries[zeta].Visible != 1 || entries[zeta].Stale != 0 {
+		t.Fatalf("unexpected zeta entry: %+v", entries[zeta])
+	}
+	if entries[alpha1].Visible != 1 || entries[alpha1].Stale != 1 {
+		t.Fatalf("expected alpha-1 counts visible=1 stale=1, got visible=%d stale=%d", entries[alpha1].Visible, entries[alpha1].Stale)
+	}
+	if alpha1 > alpha2 {
+		t.Fatalf("expected tie-break ordering by context id for equal-case titles, got alpha-1 index=%d alpha-2 index=%d", alpha1, alpha2)
 	}
 }
 

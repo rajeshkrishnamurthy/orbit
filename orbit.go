@@ -45,6 +45,7 @@ type Item struct {
 	TouchCount7d   int        `json:"touchCount7d"`
 	LastTouchedDay string     `json:"lastTouchedDay"`
 	SnoozeWakeAt   *time.Time `json:"snoozeWakeAt,omitempty"`
+	PersonIDs      []string   `json:"personIds,omitempty"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
@@ -56,6 +57,14 @@ type Context struct {
 	Y         float64   `json:"y"`
 	Color     string    `json:"color"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type ContextStripEntry struct {
+	ContextID    string `json:"contextId"`
+	ContextTitle string `json:"contextTitle"`
+	IsActive     bool   `json:"isActive"`
+	VisibleCount int    `json:"visibleCount"`
+	StaleCount   int    `json:"staleCount"`
 }
 
 type ActivityLogEntry struct {
@@ -137,6 +146,7 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/complete", app.completeItemAPI)
 	mux.HandleFunc("/api/items/touch", app.touchItemAPI)
 	mux.HandleFunc("/api/items/touch/undo", app.undoTouchItemAPI)
+	mux.HandleFunc("/api/items/refresh-foreground", app.refreshForegroundAPI)
 	mux.HandleFunc("/api/items/hide", app.hideItemAPI)
 	mux.HandleFunc("/api/items/hidden", app.hiddenItemsAPI)
 	mux.HandleFunc("/api/items/resurfaced", app.resurfacedItemsAPI)
@@ -144,8 +154,12 @@ func newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("/api/items/reveal-all", app.revealAllAPI)
 	mux.HandleFunc("/api/items/activity-log/add", app.addActivityLogAPI)
 	mux.HandleFunc("/api/items/activity-log/latest", app.latestActivityLogAPI)
+	mux.HandleFunc("/api/people/list", app.listPeopleAPI)
+	mux.HandleFunc("/api/people/create", app.createPersonAPI)
+	mux.HandleFunc("/api/people/rename", app.renamePersonAPI)
 	mux.HandleFunc("/api/contexts", app.contextsAPI)
 	mux.HandleFunc("/api/contexts/delete", app.deleteContextAPI)
+	mux.HandleFunc("/api/contexts/strip-stats", app.contextStripStatsAPI)
 	return mux, nil
 }
 
@@ -231,6 +245,33 @@ func writePageError(w http.ResponseWriter, err error, p apiErrorPolicy) {
 	http.Error(w, body.Message, status)
 }
 
+func marshalHomeJSON(resp HomeResponse) (template.JS, template.JS, template.JS, template.JS, error) {
+	if resp.Mode == "contexts" {
+		itemsJSONBytes, err := json.Marshal(resp.Contexts)
+		if err != nil {
+			return "", "", "", "", fmt.Errorf("marshal contexts payload: %w", err)
+		}
+		return template.JS(itemsJSONBytes), template.JS("[]"), template.JS("[]"), template.JS("[]"), nil
+	}
+	itemsJSONBytes, err := json.Marshal(resp.Items)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("marshal focus items payload: %w", err)
+	}
+	resurfacedJSONBytes, err := json.Marshal(resp.ResurfacedItems)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("marshal resurfaced payload: %w", err)
+	}
+	contextStripJSONBytes, err := json.Marshal(resp.ContextStripEntries)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("marshal context strip payload: %w", err)
+	}
+	peopleJSONBytes, err := json.Marshal(resp.People)
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("marshal people payload: %w", err)
+	}
+	return template.JS(itemsJSONBytes), template.JS(resurfacedJSONBytes), template.JS(contextStripJSONBytes), template.JS(peopleJSONBytes), nil
+}
+
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -247,31 +288,11 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
 		return
 	}
-	var (
-		itemsJSONBytes []byte
-		itemsJSON      template.JS
-		resurfacedJSON = template.JS("[]")
-	)
-	if resp.Mode == "contexts" {
-		itemsJSONBytes, err = json.Marshal(resp.Contexts)
-		if err != nil {
-			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-	} else {
-		itemsJSONBytes, err = json.Marshal(resp.Items)
-		if err != nil {
-			writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-		resurfacedJSONBytes, marshalErr := json.Marshal(resp.ResurfacedItems)
-		if marshalErr != nil {
-			writePageError(w, marshalErr, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
-			return
-		}
-		resurfacedJSON = template.JS(resurfacedJSONBytes)
+	itemsJSON, resurfacedJSON, contextStripJSON, peopleJSON, err := marshalHomeJSON(resp)
+	if err != nil {
+		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
 	}
-	itemsJSON = template.JS(itemsJSONBytes)
 	semanticsJSONBytes, err := json.Marshal(centerPeripherySemantics())
 	if err != nil {
 		writePageError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
@@ -285,6 +306,8 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		"CurrentContextID":    resp.CurrentContextID,
 		"CurrentContextTitle": resp.CurrentContextTitle,
 		"ResurfacedItemsJSON": resurfacedJSON,
+		"ContextStripJSON":    contextStripJSON,
+		"PeopleJSON":          peopleJSON,
 		"CenterSemanticsJSON": semanticsJSON,
 		"MobileMode":          resp.MobileMode,
 	}); err != nil {
@@ -324,6 +347,7 @@ func (a *App) itemsAPI(w http.ResponseWriter, r *http.Request) {
 		"touchCount7d":   state.TouchCount7d,
 		"lastTouchedDay": state.LastTouchedDay,
 		"inCenter":       state.InCenter,
+		"personIds":      state.PersonIDs,
 	}); err != nil {
 		log.Printf("encode itemsAPI response: %v", err)
 	}
@@ -398,16 +422,17 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type touchItemAPIResponse struct {
-	Ok             bool   `json:"ok"`
-	Touched        bool   `json:"touched"`
-	Undone         bool   `json:"undone"`
-	ID             string `json:"id"`
-	Active         bool   `json:"active"`
-	Stale          bool   `json:"stale"`
-	TouchedToday   bool   `json:"touchedToday"`
-	TouchCount7d   int    `json:"touchCount7d"`
-	LastTouchedDay string `json:"lastTouchedDay"`
-	InCenter       bool   `json:"inCenter"`
+	Ok             bool     `json:"ok"`
+	Touched        bool     `json:"touched"`
+	Undone         bool     `json:"undone"`
+	ID             string   `json:"id"`
+	Active         bool     `json:"active"`
+	Stale          bool     `json:"stale"`
+	TouchedToday   bool     `json:"touchedToday"`
+	TouchCount7d   int      `json:"touchCount7d"`
+	LastTouchedDay string   `json:"lastTouchedDay"`
+	InCenter       bool     `json:"inCenter"`
+	PersonIDs      []string `json:"personIds,omitempty"`
 }
 
 func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +474,7 @@ func (a *App) touchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
+		PersonIDs:      item.PersonIDs,
 	}); err != nil {
 		log.Printf("encode touchItemAPI response: %v", err)
 	}
@@ -493,8 +519,34 @@ func (a *App) undoTouchItemAPI(w http.ResponseWriter, r *http.Request) {
 		TouchCount7d:   item.TouchCount7d,
 		LastTouchedDay: item.LastTouchedDay,
 		InCenter:       item.InCenter,
+		PersonIDs:      item.PersonIDs,
 	}); err != nil {
 		log.Printf("encode undoTouchItemAPI response: %v", err)
+	}
+}
+
+func (a *App) refreshForegroundAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().RefreshForegroundTouchedState(reqCtx, ForegroundRefreshRequest{ContextID: in.ContextID})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "items": resp.Items}); err != nil {
+		log.Printf("encode refreshForegroundAPI response: %v", err)
 	}
 }
 
@@ -795,6 +847,88 @@ func decodeContextUpsertInput(r *http.Request) (contextUpsertInput, error) {
 	return in, nil
 }
 
+func (a *App) listPeopleAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	resp, err := a.appService().ListPeople(reqCtx)
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":     true,
+		"people": resp.People,
+	}); err != nil {
+		log.Printf("encode listPeopleAPI response: %v", err)
+	}
+}
+
+func (a *App) createPersonAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		DisplayName string `json:"displayName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().CreatePerson(reqCtx, CreatePersonRequest{DisplayName: in.DisplayName})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":     true,
+		"person": resp.Person,
+	}); err != nil {
+		log.Printf("encode createPersonAPI response: %v", err)
+	}
+}
+
+func (a *App) renamePersonAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	if strings.TrimSpace(in.ID) == "" {
+		writeAPIError(w, errors.New("id required"), apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().RenamePerson(reqCtx, RenamePersonRequest{ID: in.ID, DisplayName: in.DisplayName})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"ok":     true,
+		"person": resp.Person,
+	}); err != nil {
+		log.Printf("encode renamePersonAPI response: %v", err)
+	}
+}
+
 func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -823,6 +957,31 @@ func (a *App) contextsAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write([]byte(`{"ok":true,"id":"` + resp.ID + `"}`)); err != nil {
 		log.Printf("write contextsAPI response: %v", err)
+	}
+}
+
+func (a *App) contextStripStatsAPI(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	reqCtx, cancel := a.requestContext(r)
+	defer cancel()
+	var in struct {
+		ContextID string `json:"contextId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusBadRequest})
+		return
+	}
+	resp, err := a.appService().ContextStripStats(reqCtx, ContextStripStatsRequest{ContextID: in.ContextID})
+	if err != nil {
+		writeAPIError(w, err, apiErrorPolicy{defaultStatus: http.StatusInternalServerError})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{"ok": true, "entries": resp.Entries}); err != nil {
+		log.Printf("encode contextStripStatsAPI response: %v", err)
 	}
 }
 

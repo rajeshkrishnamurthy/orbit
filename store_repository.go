@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -56,9 +58,13 @@ func (s *Store) updateWithContext(ctx context.Context, item Item) error {
 	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		return fmt.Errorf("load item created_at %q: %w", item.ID, scanErr)
 	}
+	personIDsJSON, marshalErr := marshalPersonIDs(item.PersonIDs)
+	if marshalErr != nil {
+		return marshalErr
+	}
 	_, err := s.execContext(ctx, `
-INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO items(id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,person_ids,created_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   title=excluded.title,
   sub_note=excluded.sub_note,
@@ -67,8 +73,9 @@ ON CONFLICT(id) DO UPDATE SET
   color=excluded.color,
   slipping=excluded.slipping,
   completed=excluded.completed,
+  person_ids=excluded.person_ids,
   updated_at=excluded.updated_at;
-`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), boolToInt(item.Completed), createdAt, now.Format(time.RFC3339Nano))
+`, item.ID, contextOrDefault(item.ContextID), item.Title, item.SubNote, item.X, item.Y, item.Color, 0, boolToInt(item.Slipping), boolToInt(item.Completed), personIDsJSON, createdAt, now.Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("upsert item %q: %w", item.ID, err)
 	}
@@ -126,9 +133,37 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	return s.hiddenItemsWithContext(context.Background(), contextID)
 }
 
+func parseItemMetadata(it *Item, personIDsRaw, created, updated, contextID, label string) (string, error) {
+	createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+	if parseErr != nil {
+		return "", parseErr
+	}
+	personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
+	if parsePersonIDsErr != nil {
+		return "", fmt.Errorf("parse %s person_ids for context %q: %w", label, contextOrDefault(contextID), parsePersonIDsErr)
+	}
+	it.PersonIDs = personIDs
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		it.UpdatedAt = t
+	}
+	return createdDay, nil
+}
+
+func applyWakeAt(it *Item, wakeAt sql.NullString) error {
+	if !wakeAt.Valid {
+		return nil
+	}
+	parsedWakeAt, parseErr := parseWakeAt(wakeAt.String)
+	if parseErr != nil {
+		return parseErr
+	}
+	it.SnoozeWakeAt = &parsedWakeAt
+	return nil
+}
+
 func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([]Item, error) {
 	rows, queryErr := s.queryContext(ctx, `
-SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.created_at,i.updated_at,s.wake_at
+SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.person_ids,i.created_at,i.updated_at,s.wake_at
 FROM items i
 LEFT JOIN item_snoozes s ON s.item_id = i.id
 WHERE i.hidden=1 AND i.completed=0 AND i.context_id=?
@@ -147,25 +182,19 @@ ORDER BY
 	for rows.Next() {
 		var it Item
 		var created string
+		var personIDsRaw string
 		var updated string
 		var wakeAt sql.NullString
-		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated, &wakeAt); scanErr != nil {
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated, &wakeAt); scanErr != nil {
 			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
-		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		createdDay, parseErr := parseItemMetadata(&it, personIDsRaw, created, updated, contextID, "hidden item")
 		if parseErr != nil {
 			return nil, parseErr
 		}
 		createdByID[it.ID] = createdDay
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
-			it.UpdatedAt = t
-		}
-		if wakeAt.Valid {
-			parsedWakeAt, parseErr := parseWakeAt(wakeAt.String)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			it.SnoozeWakeAt = &parsedWakeAt
+		if err := applyWakeAt(&it, wakeAt); err != nil {
+			return nil, err
 		}
 		out = append(out, it)
 	}
@@ -210,7 +239,7 @@ func (s *Store) revealAllHidden(contextID string) ([]Item, error) {
 }
 
 func (s *Store) revealAllHiddenWithContext(ctx context.Context, contextID string) ([]Item, error) {
-	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,person_ids,created_at,updated_at FROM items WHERE hidden=1 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query hidden items to reveal for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -220,18 +249,16 @@ func (s *Store) revealAllHiddenWithContext(ctx context.Context, contextID string
 	for rows.Next() {
 		var it Item
 		var created string
+		var personIDsRaw string
 		var updated string
-		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated); scanErr != nil {
 			return nil, fmt.Errorf("scan reveal-all row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
-		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		createdDay, parseErr := parseItemMetadata(&it, personIDsRaw, created, updated, contextID, "reveal-all item")
 		if parseErr != nil {
 			return nil, parseErr
 		}
 		createdByID[it.ID] = createdDay
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
-			it.UpdatedAt = t
-		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
 		it.Hidden = false
 		out = append(out, it)
@@ -262,7 +289,7 @@ func (s *Store) snapshot(contextID string) ([]Item, error) {
 }
 
 func (s *Store) snapshotWithContext(ctx context.Context, contextID string) ([]Item, error) {
-	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,created_at,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
+	rows, queryErr := s.queryContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,person_ids,created_at,updated_at FROM items WHERE hidden=0 AND completed=0 AND context_id=? ORDER BY updated_at DESC`, contextOrDefault(contextID))
 	if queryErr != nil {
 		return nil, fmt.Errorf("query visible items for context %q: %w", contextOrDefault(contextID), queryErr)
 	}
@@ -272,8 +299,9 @@ func (s *Store) snapshotWithContext(ctx context.Context, contextID string) ([]It
 	for rows.Next() {
 		var it Item
 		var created string
+		var personIDsRaw string
 		var updated string
-		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &created, &updated); scanErr != nil {
+		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated); scanErr != nil {
 			return nil, fmt.Errorf("scan visible item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
 		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
@@ -281,6 +309,11 @@ func (s *Store) snapshotWithContext(ctx context.Context, contextID string) ([]It
 			return nil, parseErr
 		}
 		createdByID[it.ID] = createdDay
+		personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
+		if parsePersonIDsErr != nil {
+			return nil, fmt.Errorf("parse visible item person_ids for context %q: %w", contextOrDefault(contextID), parsePersonIDsErr)
+		}
+		it.PersonIDs = personIDs
 		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 			it.UpdatedAt = t
 		}
@@ -306,11 +339,17 @@ func (s *Store) snapshotWithContext(ctx context.Context, contextID string) ([]It
 
 func (s *Store) touchItemStateWithContext(ctx context.Context, id string) (*Item, error) {
 	var it Item
+	var personIDsRaw string
 	var updated string
-	err := s.queryRowContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &updated)
+	err := s.queryRowContext(ctx, `SELECT id,context_id,title,sub_note,x,y,color,hidden,slipping,completed,person_ids,updated_at FROM items WHERE id=?`, id).Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &updated)
 	if err != nil {
 		return nil, fmt.Errorf("load item %q state: %w", id, err)
 	}
+	personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
+	if parsePersonIDsErr != nil {
+		return nil, fmt.Errorf("parse item %q person_ids: %w", id, parsePersonIDsErr)
+	}
+	it.PersonIDs = personIDs
 	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
 		it.UpdatedAt = t
 	}
@@ -347,6 +386,100 @@ func (s *Store) contextsWithContext(ctx context.Context) ([]Context, error) {
 		return out, fmt.Errorf("iterate contexts: %w", err)
 	}
 	return out, nil
+}
+
+type contextStripItemMeta struct {
+	contextID  string
+	inCenter   bool
+	createdDay string
+}
+
+func (s *Store) loadContextStripItemMetaWithContext(ctx context.Context) (map[string]contextStripItemMeta, []string, error) {
+	rows, err := s.queryContext(ctx, `SELECT id, context_id, x, y, created_at FROM items WHERE hidden=0 AND completed=0`)
+	if err != nil {
+		return nil, nil, fmt.Errorf("query visible items for context strip: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	metaByID := map[string]contextStripItemMeta{}
+	ids := []string{}
+	for rows.Next() {
+		var (
+			itemID    string
+			contextID string
+			x         float64
+			y         float64
+			createdAt string
+		)
+		if err := rows.Scan(&itemID, &contextID, &x, &y, &createdAt); err != nil {
+			return nil, nil, fmt.Errorf("scan context strip item row: %w", err)
+		}
+		createdDay, parseErr := parseCreatedLocalDay(itemID, createdAt)
+		if parseErr != nil {
+			return nil, nil, parseErr
+		}
+		metaByID[itemID] = contextStripItemMeta{contextID: contextID, inCenter: classifyDesktopBand(x, y), createdDay: createdDay}
+		ids = append(ids, itemID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate context strip item rows: %w", err)
+	}
+	return metaByID, ids, nil
+}
+
+func applyContextStripCounts(entriesByID map[string]ContextStripEntry, metaByID map[string]contextStripItemMeta, summaries map[string]touchSummary) {
+	for itemID, meta := range metaByID {
+		entry, ok := entriesByID[meta.contextID]
+		if !ok {
+			continue
+		}
+		entry.VisibleCount++
+		state := Item{InCenter: meta.inCenter}
+		deriveTouchState(&state, meta.createdDay, summaries[itemID])
+		if state.Stale {
+			entry.StaleCount++
+		}
+		entriesByID[meta.contextID] = entry
+	}
+}
+
+func sortContextStripEntries(entries []ContextStripEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		a := strings.ToLower(entries[i].ContextTitle)
+		b := strings.ToLower(entries[j].ContextTitle)
+		if a != b {
+			return a < b
+		}
+		return entries[i].ContextID < entries[j].ContextID
+	})
+}
+
+func (s *Store) contextStripEntriesWithContext(ctx context.Context, currentContextID string) ([]ContextStripEntry, error) {
+	currentID := contextOrDefault(currentContextID)
+	contexts, err := s.contextsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entriesByID := make(map[string]ContextStripEntry, len(contexts))
+	for _, c := range contexts {
+		entriesByID[c.ID] = ContextStripEntry{ContextID: c.ID, ContextTitle: c.Title, IsActive: c.ID == currentID}
+	}
+	metaByID, ids, err := s.loadContextStripItemMetaWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	summaries, err := s.touchSummariesWithContext(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	applyContextStripCounts(entriesByID, metaByID, summaries)
+
+	entries := make([]ContextStripEntry, 0, len(entriesByID))
+	for _, entry := range entriesByID {
+		entries = append(entries, entry)
+	}
+	sortContextStripEntries(entries)
+	return entries, nil
 }
 
 func (s *Store) contextByID(id string) (*Context, error) {

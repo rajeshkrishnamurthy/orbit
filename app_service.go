@@ -27,6 +27,8 @@ type HomeResponse struct {
 	Items               []Item
 	ResurfacedItems     []Item
 	Contexts            []Context
+	People              []Person
+	ContextStripEntries []ContextStripEntry
 	HiddenCount         int
 	Mode                string
 	CurrentContextID    string
@@ -59,6 +61,10 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
+	people, err := s.store.listPeopleWithContext(ctx)
+	if err != nil {
+		return HomeResponse{}, err
+	}
 	if markErr := s.store.markExpiredSnoozesResurfacedWithContext(ctx, time.Now()); markErr != nil {
 		return HomeResponse{}, markErr
 	}
@@ -70,15 +76,37 @@ func (s *AppService) Home(ctx context.Context, req HomeRequest) (HomeResponse, e
 	if err != nil {
 		return HomeResponse{}, err
 	}
+	stripEntries, err := s.store.contextStripEntriesWithContext(ctx, ctxID)
+	if err != nil {
+		return HomeResponse{}, err
+	}
 	return HomeResponse{
 		Items:               items,
 		ResurfacedItems:     resurfacedItems,
+		People:              people,
+		ContextStripEntries: stripEntries,
 		HiddenCount:         hiddenN,
 		Mode:                "focus",
 		CurrentContextID:    cur.ID,
 		CurrentContextTitle: cur.Title,
 		MobileMode:          req.MobileMode,
 	}, nil
+}
+
+type ContextStripStatsRequest struct {
+	ContextID string
+}
+
+type ContextStripStatsResponse struct {
+	Entries []ContextStripEntry
+}
+
+func (s *AppService) ContextStripStats(ctx context.Context, req ContextStripStatsRequest) (ContextStripStatsResponse, error) {
+	entries, err := s.store.contextStripEntriesWithContext(ctx, req.ContextID)
+	if err != nil {
+		return ContextStripStatsResponse{}, err
+	}
+	return ContextStripStatsResponse{Entries: entries}, nil
 }
 
 type UpsertItemRequest struct {
@@ -260,6 +288,22 @@ func (s *AppService) LatestActivityLog(ctx context.Context, req LatestActivityLo
 		return LatestActivityLogResponse{}, err
 	}
 	return LatestActivityLogResponse{Entries: entries}, nil
+}
+
+type ForegroundRefreshRequest struct {
+	ContextID string
+}
+
+type ForegroundRefreshResponse struct {
+	Items []Item
+}
+
+func (s *AppService) RefreshForegroundTouchedState(ctx context.Context, req ForegroundRefreshRequest) (ForegroundRefreshResponse, error) {
+	items, err := s.store.refreshForegroundTouchedStateWithContext(ctx, req.ContextID)
+	if err != nil {
+		return ForegroundRefreshResponse{}, err
+	}
+	return ForegroundRefreshResponse{Items: items}, nil
 }
 
 type UnhideAtRequest struct {

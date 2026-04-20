@@ -15,11 +15,16 @@ const ENDPOINTS = {
   itemsDelete: '/api/items/delete',
   itemsActivityLogAdd: '/api/items/activity-log/add',
   itemsActivityLogLatest: '/api/items/activity-log/latest',
+  peopleList: '/api/people/list',
+  peopleCreate: '/api/people/create',
+  peopleRename: '/api/people/rename',
   contextsDelete: '/api/contexts/delete',
   itemsComplete: '/api/items/complete',
   itemsTouch: '/api/items/touch',
   itemsTouchUndo: '/api/items/touch/undo',
   itemsUnhideAt: '/api/items/unhide-at',
+  itemsRefreshForeground: '/api/items/refresh-foreground',
+  contextsStripStats: '/api/contexts/strip-stats',
 };
 
 async function readTextSafe(response) {
@@ -170,6 +175,51 @@ export function createMutationTransport({ fetchImpl } = {}) {
       }
     },
 
+    async listPeople() {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleList, postBody({}));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleList, error: detail || `people list failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleList, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleList, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async createPerson({ displayName }) {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleCreate, postBody({ displayName }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleCreate, error: detail || `create person failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleCreate, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleCreate, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async renamePerson({ id, displayName }) {
+      try {
+        const response = await doFetch(ENDPOINTS.peopleRename, postBody({ id, displayName }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.peopleRename, error: detail || `rename person failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.peopleRename, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.peopleRename, error: mutationErrorSummary(err) };
+      }
+    },
+
     async deleteEntity({ mode, id }) {
       const endpoint = mode === 'focus' ? ENDPOINTS.itemsDelete : ENDPOINTS.contextsDelete;
       try {
@@ -300,6 +350,36 @@ export function createMutationTransport({ fetchImpl } = {}) {
         return { ok: true, status, endpoint: ENDPOINTS.itemsUnhideAt, data };
       } catch (err) {
         return { ok: false, status: null, endpoint: ENDPOINTS.itemsUnhideAt, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async refreshForeground({ contextId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.itemsRefreshForeground, postBody({ contextId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.itemsRefreshForeground, error: detail || `foreground refresh failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.itemsRefreshForeground, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.itemsRefreshForeground, error: mutationErrorSummary(err) };
+      }
+    },
+
+    async loadContextStrip({ contextId }) {
+      try {
+        const response = await doFetch(ENDPOINTS.contextsStripStats, postBody({ contextId }));
+        const status = response.status;
+        if (!response.ok) {
+          const detail = await readTextSafe(response);
+          return { ok: false, status, endpoint: ENDPOINTS.contextsStripStats, error: detail || `context strip load failed (${status})` };
+        }
+        const data = await readJSONSafe(response);
+        return { ok: true, status, endpoint: ENDPOINTS.contextsStripStats, data };
+      } catch (err) {
+        return { ok: false, status: null, endpoint: ENDPOINTS.contextsStripStats, error: mutationErrorSummary(err) };
       }
     },
 

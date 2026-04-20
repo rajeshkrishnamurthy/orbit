@@ -16,6 +16,7 @@ export function createLensStateController({
   let staleLensSnapshot = new Set();
   const staleLensDetachedPins = new Map();
   let dragHaloActive = false;
+  let additionalVisibilityPredicate = () => true;
 
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
@@ -192,9 +193,13 @@ export function createLensStateController({
 
   function isVisible(pin) {
     const id = pin.dataset.id;
-    if (lens === 'all') return true;
-    if (lens === 'stale') return staleLensSnapshot.has(id);
-    return lensExempt.has(id) || inLens(pin);
+    let lensVisible = true;
+    if (lens !== 'all') {
+      if (lens === 'stale') lensVisible = staleLensSnapshot.has(id);
+      else lensVisible = lensExempt.has(id) || inLens(pin);
+    }
+    if (!lensVisible) return false;
+    return additionalVisibilityPredicate(pin) !== false;
   }
 
   function applyLens() {
@@ -281,6 +286,12 @@ export function createLensStateController({
     return (lens === 'stale' ? isVisible(pin) : (!markSaved || isVisible(pin))) ? '' : 'none';
   }
 
+  function setAdditionalVisibilityPredicate(nextPredicate) {
+    if (typeof nextPredicate === 'function') additionalVisibilityPredicate = nextPredicate;
+    else additionalVisibilityPredicate = () => true;
+    applyLens();
+  }
+
   return {
     applyDistanceStyle,
     applyLens,
@@ -291,6 +302,7 @@ export function createLensStateController({
     isVisible,
     registerPin,
     renderButtons,
+    setAdditionalVisibilityPredicate,
     setDragHalo,
     updateBoundaryCue,
   };

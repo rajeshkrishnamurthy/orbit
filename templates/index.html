@@ -20,6 +20,7 @@
               <span id="context-name" class="context-name">{{.CurrentContextTitle}}</span>
               <button id="open-contexts" class="context-link" title="Open Context Canvas">◎</button>
             </div>
+            <div id="chrome-context-strip" class="chrome-context-strip" hidden></div>
           </div>
           <div class="system-strip__controls" data-zone="top-right chrome">
             <div class="toolbar" id="toolbar"></div>
@@ -44,6 +45,8 @@
     window.__CURRENT_CONTEXT_ID__ = "{{.CurrentContextID}}";
     window.__CURRENT_CONTEXT_TITLE__ = "{{.CurrentContextTitle}}";
     window.__RESURFACED_ITEMS__ = {{.ResurfacedItemsJSON}};
+    window.__CONTEXT_STRIP_ENTRIES__ = {{.ContextStripJSON}};
+    window.__PEOPLE__ = {{.PeopleJSON}};
     window.__CENTER_SEMANTICS__ = {{.CenterSemanticsJSON}};
     window.__MOBILE_MODE__ = {{if .MobileMode}}true{{else}}false{{end}};
   </script>

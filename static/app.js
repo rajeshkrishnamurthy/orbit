@@ -12,6 +12,8 @@ void (async () => {
     {createUndoAckController},
     {createResurfaceShelfController},
     {createHideSnoozeChoiceController},
+    {createChromeContextStripController},
+    {createPinPeopleController}, {createPeopleFilterController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
@@ -25,11 +27,13 @@ void (async () => {
     import('/static/undo_ack_state.js'),
     import('/static/resurface_shelf_state.js'),
     import('/static/hide_snooze_choice_state.js'),
+    import('/static/chrome_context_strip.js'), import('/static/pin_people_state.js'), import('/static/people_filter_state.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
   const surface = document.getElementById('surface');
   const toolbar = document.getElementById('toolbar');
+  const chromeContextStripEl = document.getElementById('chrome-context-strip');
   const systemAckArea = document.getElementById('system-ack-stack');
   const resurfaceShelf = document.getElementById('resurface-shelf');
   const boundaryEl = document.createElement('div');
@@ -37,6 +41,8 @@ void (async () => {
   surface.appendChild(boundaryEl);
   const items = window.__ITEMS__ || [];
   const resurfacedItems = window.__RESURFACED_ITEMS__ || [];
+  const initialContextStripEntries = window.__CONTEXT_STRIP_ENTRIES__ || [];
+  const initialPeople = window.__PEOPLE__ || [];
   const mode = window.__MODE__ || 'focus';
   const currentContextId = window.__CURRENT_CONTEXT_ID__ || 'main-orbit';
   const centerSemantics = readCenterSemantics();
@@ -53,6 +59,7 @@ void (async () => {
   let pinActivityLogState = null;
   let resurfaceShelfState = null;
   let hideSnoozeChoiceState = null;
+  let chromeContextStripState = null; let pinPeopleState = null; let peopleFilterState = null;
 
   function readCenterSemantics() {
     const candidates = [
@@ -128,6 +135,28 @@ void (async () => {
     }
     return mutationTransportPromise;
   }
+
+  function navigateToContext(targetContextId) {
+    const id = (targetContextId || '').trim();
+    if (!id || id === currentContextId) return;
+    location.href = '/?ctx=' + encodeURIComponent(id);
+  }
+
+  async function refreshChromeContextStrip() {
+    if (!chromeContextStripState || mode !== 'focus') return;
+    await chromeContextStripState.refresh();
+  }
+
+  chromeContextStripState = createChromeContextStripController({
+    documentRef: document,
+    container: chromeContextStripEl,
+    mode,
+    activeContextId: currentContextId,
+    initialEntries: initialContextStripEntries,
+    getTransport: getMutationTransport,
+    onNavigate: navigateToContext,
+  });
+
   pinPresenter = createPinPresenter({
     documentRef: document,
     mode,
@@ -144,7 +173,9 @@ void (async () => {
     applyTouchResponse,
   });
   async function persistContextTitle(){
-    return mutationOrchestrator.persistContextTitle(contextNameEl);
+    const result = await mutationOrchestrator.persistContextTitle(contextNameEl);
+    await refreshChromeContextStrip();
+    return result;
   }
   if (mode === 'focus' && contextNameEl) {
     contextNameEl.contentEditable = 'true';
@@ -222,6 +253,8 @@ void (async () => {
     centerSemantics,
     syncCanvasViewportRect,
   });
+  pinPeopleState = createPinPeopleController({documentRef: document, layoutShell, surface, getTransport: getMutationTransport, showCanvasWarning, closeActivityLogPopover, savePin, onPeopleUpdated(people) { if (peopleFilterState && typeof peopleFilterState.refreshPeople === 'function') void peopleFilterState.refreshPeople(people); }});
+  peopleFilterState = createPeopleFilterController({documentRef: document, layoutShell, filtersControls, surface, mode, getTransport: getMutationTransport, lensState, initialPeople, showCanvasWarning});
 
   hiddenTrayState = createHiddenTrayController({
     layoutShell,
@@ -230,6 +263,7 @@ void (async () => {
     mode,
     currentContextId,
     initialHiddenCount: window.__HIDDEN_COUNT__ || 0,
+    initialResurfacedCount: Array.isArray(resurfacedItems) ? resurfacedItems.length : 0,
     getMutationTransport,
     syncCanvasViewportRect,
   });
@@ -281,6 +315,7 @@ void (async () => {
         lensState.forgetPin(pin.dataset.id);
         if (activePin === pin) setActivePin(null);
         pin.remove();
+        void refreshChromeContextStrip();
       },
       handleDeleteSuccess(pin, payload) {
         lensState.forgetPin(pin.dataset.id);
@@ -291,6 +326,7 @@ void (async () => {
           return;
         }
         if (mode === 'focus') undoAckController.showDeleteUndo(payload);
+        void refreshChromeContextStrip();
       },
       handleDiscardRemove(pin) {
         if (activePin === pin) setActivePin(null);
@@ -303,9 +339,20 @@ void (async () => {
     touchEffects: {
       applyTouchResponse,
       showTouchUndo: undoAckController.showTouchUndo,
+      onTouchCommitted: refreshChromeContextStrip,
     },
     completeEffects: {
       handleCompleteSuccess: undoAckController.handleCompleteSuccess,
+      onCompleteCommitted: refreshChromeContextStrip,
+    },
+    activityLogEffects: {
+      openAfterEffectiveTouch(pin, { anchorEl } = {}) {
+        if (!pinActivityLogState) return;
+        const id = (pin?.dataset?.id || '').trim();
+        if (!id) return;
+        if (pinActivityLogState.isOpenForItem(id)) return;
+        pinActivityLogState.open(pin, { anchorEl });
+      },
     },
   });
   pinActivityLogState = createPinActivityLogController({
@@ -344,7 +391,8 @@ void (async () => {
         hideSnoozeChoiceState.open(pin, options);
       },
       delete: pinDestructiveController.deletePinImmediate,
-      activityLog: pinActivityLogState.open,
+      activityLog(pin, options) { if (pinPeopleState) pinPeopleState.close(); pinActivityLogState.open(pin, options); },
+      people(pin, options) { if (pinPeopleState) pinPeopleState.open(pin, options); },
       touch: pinTouchCompleteController.touchPinImmediate,
       complete: pinTouchCompleteController.completePinImmediate,
       discardIfEmpty: pinDestructiveController.discardIfEmpty,
@@ -373,6 +421,7 @@ void (async () => {
 
   function applyLens(){
     lensState.applyLens();
+    if (peopleFilterState) peopleFilterState.syncEmptyState();
   }
 
   function applyDistanceStyle(pin){
@@ -443,6 +492,7 @@ void (async () => {
       x: parseFloat(pin.style.left) || 0,
       y: parseFloat(pin.style.top) || 0,
       color: pin.dataset.color || 'var(--c1)',
+      personIds: pinPeopleState ? pinPeopleState.readPinPersonIDs(pin) : [],
       slipping: pin.dataset.slipping === 'true',
       completed: pin.dataset.state === 'completed'
     };
@@ -453,6 +503,32 @@ void (async () => {
   }
   function savePin(pin){
     mutationOrchestrator.savePin(pin);
+  }
+
+  let foregroundRefreshInFlight = false;
+  async function runForegroundRefreshPass(){
+    if (mode !== 'focus') return;
+    if (foregroundRefreshInFlight) return;
+    if (document.hidden) return;
+    foregroundRefreshInFlight = true;
+    try {
+      const transport = await getMutationTransport();
+      const result = await transport.refreshForeground({ contextId: currentContextId });
+      if (!result || !result.ok || !result.data || !Array.isArray(result.data.items)) return;
+      for (const item of result.data.items) {
+        if (!item || !item.id) continue;
+        const pin = surface.querySelector(`.pin[data-id="${item.id}"]`);
+        if (!pin) continue;
+        applyTouchResponse(pin, item);
+      }
+      applyLens();
+      if (hiddenTrayState && typeof hiddenTrayState.recomputeCounts === 'function') {
+        await hiddenTrayState.recomputeCounts({ runDueRefresh: true });
+      }
+      await refreshChromeContextStrip();
+    } finally {
+      foregroundRefreshInFlight = false;
+    }
   }
 
   function showResurfaceAck(){
@@ -482,6 +558,7 @@ void (async () => {
       showResurfaceAck,
       onUnhideSuccess(id) {
         if (resurfaceShelfState) resurfaceShelfState.removeItem(id);
+        void refreshChromeContextStrip();
       },
     });
   });
@@ -489,22 +566,27 @@ void (async () => {
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     if (ev.defaultPrevented) return;
-    if (pinActivityLogState && pinActivityLogState.isOpen()) {
-      closeActivityLogPopover();
+    if (pinActivityLogState && pinActivityLogState.isOpen()) { closeActivityLogPopover(); return; }
+    if (pinPeopleState && pinPeopleState.isOpen()) { pinPeopleState.close(); return; }
+    if (hiddenTrayState.isOpen()) {
+      closeHiddenTray();
       return;
     }
-    if (hiddenTrayState.isOpen()) closeHiddenTray();
+    if (chromeContextStripState) chromeContextStripState.closeOverflow();
   });
 
   document.addEventListener('pointerdown', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target) return;
-    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity')) return;
+    if (chromeContextStripState) chromeContextStripState.handleGlobalPointerDown(target);
+    if (peopleFilterState) peopleFilterState.handleOutsidePointer(target);
+    if (pinPeopleState) pinPeopleState.handleOutsidePointer(target);
+    if (target.closest('.hidden-tray') || target.closest('#hidden-toggle') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.pin-activity') || target.closest('.people-popover') || target.closest('.pin-people-indicator')) return;
     if (target.closest('.sw')) {
       closeHiddenTray();
       return;
     }
-    if (target.closest('.filters-tray')) return;
+    if (target.closest('.filters-tray') || target.closest('.chrome-context-strip')) return;
     if (surface.contains(target)) return;
     closeActivityLogPopover();
     closeHiddenTray();
@@ -517,12 +599,13 @@ void (async () => {
     if (outsideTrayClick) closeHiddenTray();
     const outsideActivityLog = pinActivityLogState && pinActivityLogState.isOpen() && !target.closest('.activity-log-popover') && !target.closest('.pin-activity');
     if (outsideActivityLog) closeActivityLogPopover();
-    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm') || target.closest('.activity-log-popover')) return;
+    if (pinPeopleState) pinPeopleState.handleOutsidePointer(target);
+    if (target.closest('.pin') || target.closest('.toolbar') || target.closest('.hint') || target.closest('.undo-toast') || target.closest('.context-head') || target.closest('.hidden-tray') || target.closest('.context-confirm') || target.closest('.activity-log-popover') || target.closest('.people-popover')) return;
     if (outsideTrayClick) return;
     const rect = getCanvasViewportRect();
     const x = Math.max(6, Math.min(rect.width - 190, e.clientX - rect.left));
     const y = Math.max(6, Math.min(rect.height - 90, e.clientY - rect.top));
-    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), slipping: false}, true, false);
+    createPin({id: uid(), title: '', subNote: '', x, y, color: selectedPaletteColor(), personIds: [], slipping: false}, true, false);
     e.preventDefault();
   });
 
@@ -532,6 +615,7 @@ void (async () => {
   renderLensButtons();
   syncCanvasViewportRect();
   applyLens();
+  void refreshChromeContextStrip();
 
   window.addEventListener('resize', () => {
     syncCanvasViewportRect();
@@ -541,6 +625,15 @@ void (async () => {
     undoAckController.refreshAckMode();
     placeHiddenTray();
     if (pinActivityLogState) pinActivityLogState.repositionIfOpen();
+    if (chromeContextStripState) chromeContextStripState.closeOverflow();
+  });
+
+  window.addEventListener('focus', () => {
+    void runForegroundRefreshPass();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void runForegroundRefreshPass();
   });
 
   window.addEventListener('beforeunload', () => {

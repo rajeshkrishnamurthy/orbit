@@ -30,6 +30,7 @@ export function createPinDomController({
     const complete = pin.querySelector('.pin-complete');
     const activity = pin.querySelector('.pin-activity');
     const touch = pin.querySelector('.pin-touch');
+    const peopleIndicator = pin.querySelector('.pin-people-indicator');
     if (rightEdge) {
       rightEdge.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       rightEdge.addEventListener('click', (ev) => ev.stopPropagation());
@@ -81,7 +82,15 @@ export function createPinDomController({
       touch.addEventListener('click', (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        pinActions.touch(pin);
+        pinActions.touch(pin, { anchorEl: touch });
+      });
+    }
+    if (peopleIndicator) {
+      peopleIndicator.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+      peopleIndicator.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (pinActions.people) pinActions.people(pin, { anchorEl: peopleIndicator });
       });
     }
     const enter = pin.querySelector('.pin-enter');
@@ -181,6 +190,7 @@ export function createPinDomController({
     pin.dataset.active = item.active ? 'true' : 'false';
     pin.dataset.stale = item.stale ? 'true' : 'false';
     pin.dataset.inCenter = item.inCenter ? 'true' : 'false';
+    pin.dataset.personIds = JSON.stringify(Array.isArray(item.personIds) ? item.personIds : []);
     lensState.registerPin(item.id, markSaved);
     pin.dataset.saved = markSaved ? 'true' : 'false';
     pin.style.left = `${item.x}px`;
@@ -188,7 +198,7 @@ export function createPinDomController({
     const edgeTargets = '<span class="pin-edge pin-edge--top" aria-hidden="true"></span><span class="pin-edge pin-edge--right" aria-hidden="true"></span><span class="pin-edge pin-edge--bottom" aria-hidden="true"></span><span class="pin-edge pin-edge--left" aria-hidden="true"></span>';
     const enterBtn = mode === 'contexts' ? '<button class="pin-enter" aria-label="Enter context" title="Enter">→</button>' : '';
     const slipBtn = mode === 'focus' ? '<button class="pin-slip" aria-label="Slipping" title="Slipping">!</button>' : '';
-    const actionDrawer = mode === 'focus' ? '<div class="pin-action-host"><span class="pin-action-affordance" aria-hidden="true">⋯</span><span class="pin-drawer-dim" aria-hidden="true"></span><div class="pin-action-drawer" role="group" aria-label="Card actions"><button class="pin-activity" aria-label="Activity log" title="Activity log">i</button><button class="pin-hide" aria-label="Minimize card" title="Minimize">–</button><button class="pin-delete" aria-label="Cancel card" title="Cancel">×</button><button class="pin-complete" aria-label="Complete card" title="Complete">✓</button></div></div><span class="pin-complete-smile" aria-hidden="true"></span><button class="pin-touch" aria-pressed="false" aria-label="Touch card" title="Touch card">◌</button>' : '';
+    const actionDrawer = mode === 'focus' ? '<div class="pin-action-host"><span class="pin-action-affordance" aria-hidden="true">⋯</span><span class="pin-drawer-dim" aria-hidden="true"></span><div class="pin-action-drawer" role="group" aria-label="Card actions"><button class="pin-activity" aria-label="Activity log" title="Activity log">i</button><button class="pin-hide" aria-label="Minimize card" title="Minimize">–</button><button class="pin-delete" aria-label="Cancel card" title="Cancel">×</button><button class="pin-complete" aria-label="Complete card" title="Complete">✓</button></div></div><span class="pin-complete-smile" aria-hidden="true"></span><button class="pin-touch" aria-pressed="false" aria-label="Touch card" title="Touch card">◌</button><button class="pin-people-indicator" aria-label="Manage people" title="Manage people"><span class="pin-people-indicator__icon" aria-hidden="true">👥</span><span class="pin-people-indicator__count">0</span></button>' : '';
     const deleteBtn = mode === 'contexts' ? '<button class="pin-delete" aria-label="Delete card" title="Delete">×</button>' : '';
     pin.innerHTML = `${edgeTargets}${actionDrawer}${enterBtn}${slipBtn}${deleteBtn}<label class="pin-title"><input value="${escapedTitleValue(item.title)}" /></label><label class="pin-note"><textarea rows="2">${escapedNoteValue(item.subNote)}</textarea></label>`;
     pin.dataset.persistedTitle = item.title || '';
@@ -200,6 +210,11 @@ export function createPinDomController({
     bindPin(pin);
     pin.style.display = lensState.initialDisplayValue(pin, markSaved);
     fitNoteHeight(pin.querySelector('.pin-note textarea'));
+    const indicatorCount = pin.querySelector('.pin-people-indicator__count');
+    if (indicatorCount) {
+      const personIds = Array.isArray(item.personIds) ? item.personIds : [];
+      indicatorCount.textContent = String(personIds.length);
+    }
     pinUi.setActive(pin);
     if (focusTitle) {
       const titleInput = pin.querySelector('.pin-title input');

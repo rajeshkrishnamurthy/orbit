@@ -53,6 +53,11 @@ export function createPinActivityLogController({
     return !!panel;
   }
 
+  function isOpenForItem(nextItemID) {
+    if (!panel) return false;
+    return itemID === (nextItemID || '').trim();
+  }
+
   function place(nextAnchor) {
     if (!panel || !nextAnchor) return;
     const anchorRect = nextAnchor.getBoundingClientRect();
@@ -264,6 +269,7 @@ export function createPinActivityLogController({
   return {
     close,
     isOpen,
+    isOpenForItem,
     open,
     repositionIfOpen() {
       if (!panel) return;

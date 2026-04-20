@@ -2,6 +2,7 @@ export function createPinTouchCompleteController({
   runtime,
   touchEffects,
   completeEffects,
+  activityLogEffects,
 }) {
   const {
     mode,
@@ -11,10 +12,11 @@ export function createPinTouchCompleteController({
     cancelPendingSave,
     showCanvasWarning,
   } = runtime;
-  const {applyTouchResponse, showTouchUndo} = touchEffects;
-  const {handleCompleteSuccess} = completeEffects;
+  const {applyTouchResponse, showTouchUndo, onTouchCommitted} = touchEffects;
+  const {handleCompleteSuccess, onCompleteCommitted} = completeEffects;
+  const {openAfterEffectiveTouch} = activityLogEffects || {};
 
-  async function touchPinImmediate(pin) {
+  async function touchPinImmediate(pin, { anchorEl } = {}) {
     if (mode !== 'focus' || pin.dataset.saved !== 'true') return;
     if (pin.dataset.state === 'completed' || pin.dataset.transitioning === 'true') return;
     const payload = readPinPayload(pin);
@@ -36,7 +38,19 @@ export function createPinTouchCompleteController({
       }
       const data = result.data;
       applyTouchResponse(pin, data);
-      if (data.touched) showTouchUndo(pin, payload);
+      if (data.touched) {
+        if (typeof openAfterEffectiveTouch === 'function') {
+          try {
+            openAfterEffectiveTouch(pin, { anchorEl });
+          } catch (_err) {
+            // touch commit remains authoritative even if popover launch fails.
+          }
+        }
+        showTouchUndo(pin, payload);
+      }
+      if (typeof onTouchCommitted === 'function') {
+        await onTouchCommitted();
+      }
     } catch (_err) {
       showCanvasWarning('Unable to touch card. Please try again.');
     }
@@ -71,6 +85,9 @@ export function createPinTouchCompleteController({
       return;
     }
     handleCompleteSuccess(pin, payload);
+    if (typeof onCompleteCommitted === 'function') {
+      await onCompleteCommitted();
+    }
   }
 
   return {
