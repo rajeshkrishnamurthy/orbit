@@ -19,7 +19,8 @@ func TestUpsertItemPersonIDsSanitizedAndPersisted(t *testing.T) {
 	}
 
 	item := Item{ID: "p_assoc_1", ContextID: "main-orbit", Title: "Person IDs", SubNote: "", X: 200, Y: 200, Color: "var(--c1)", PersonIDs: []string{first.Person.ID, "", first.Person.ID, second.Person.ID}}
-	if _, err := service.UpsertItem(context.Background(), UpsertItemRequest{Item: item}); err != nil {
+	_, err = service.UpsertItem(context.Background(), UpsertItemRequest{Item: item})
+	if err != nil {
 		t.Fatalf("upsert item: %v", err)
 	}
 
@@ -45,11 +46,13 @@ func TestRenamePersonKeepsItemIDLinksIntact(t *testing.T) {
 	}
 
 	item := Item{ID: "p_assoc_2", ContextID: "main-orbit", Title: "Linked", SubNote: "", X: 220, Y: 220, Color: "var(--c2)", PersonIDs: []string{person.Person.ID}}
-	if _, err := service.UpsertItem(context.Background(), UpsertItemRequest{Item: item}); err != nil {
+	_, err = service.UpsertItem(context.Background(), UpsertItemRequest{Item: item})
+	if err != nil {
 		t.Fatalf("upsert item: %v", err)
 	}
 
-	if _, err := service.RenamePerson(context.Background(), RenamePersonRequest{ID: person.Person.ID, DisplayName: "Samuel Lee"}); err != nil {
+	_, err = service.RenamePerson(context.Background(), RenamePersonRequest{ID: person.Person.ID, DisplayName: "Samuel Lee"})
+	if err != nil {
 		t.Fatalf("rename person: %v", err)
 	}
 

@@ -422,13 +422,13 @@ func (a *App) completeItemAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 type touchItemAPIResponse struct {
-	Ok             bool   `json:"ok"`
-	Touched        bool   `json:"touched"`
-	Undone         bool   `json:"undone"`
-	ID             string `json:"id"`
-	Active         bool   `json:"active"`
-	Stale          bool   `json:"stale"`
-	TouchedToday   bool   `json:"touchedToday"`
+	Ok             bool     `json:"ok"`
+	Touched        bool     `json:"touched"`
+	Undone         bool     `json:"undone"`
+	ID             string   `json:"id"`
+	Active         bool     `json:"active"`
+	Stale          bool     `json:"stale"`
+	TouchedToday   bool     `json:"touchedToday"`
 	TouchCount7d   int      `json:"touchCount7d"`
 	LastTouchedDay string   `json:"lastTouchedDay"`
 	InCenter       bool     `json:"inCenter"`

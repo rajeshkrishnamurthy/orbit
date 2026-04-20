@@ -133,6 +133,34 @@ func (s *Store) hiddenItems(contextID string) ([]Item, error) {
 	return s.hiddenItemsWithContext(context.Background(), contextID)
 }
 
+func parseItemMetadata(it *Item, personIDsRaw, created, updated, contextID, label string) (string, error) {
+	createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+	if parseErr != nil {
+		return "", parseErr
+	}
+	personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
+	if parsePersonIDsErr != nil {
+		return "", fmt.Errorf("parse %s person_ids for context %q: %w", label, contextOrDefault(contextID), parsePersonIDsErr)
+	}
+	it.PersonIDs = personIDs
+	if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
+		it.UpdatedAt = t
+	}
+	return createdDay, nil
+}
+
+func applyWakeAt(it *Item, wakeAt sql.NullString) error {
+	if !wakeAt.Valid {
+		return nil
+	}
+	parsedWakeAt, parseErr := parseWakeAt(wakeAt.String)
+	if parseErr != nil {
+		return parseErr
+	}
+	it.SnoozeWakeAt = &parsedWakeAt
+	return nil
+}
+
 func (s *Store) hiddenItemsWithContext(ctx context.Context, contextID string) ([]Item, error) {
 	rows, queryErr := s.queryContext(ctx, `
 SELECT i.id,i.context_id,i.title,i.sub_note,i.x,i.y,i.color,i.hidden,i.slipping,i.completed,i.person_ids,i.created_at,i.updated_at,s.wake_at
@@ -160,25 +188,13 @@ ORDER BY
 		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated, &wakeAt); scanErr != nil {
 			return nil, fmt.Errorf("scan hidden item row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
-		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		createdDay, parseErr := parseItemMetadata(&it, personIDsRaw, created, updated, contextID, "hidden item")
 		if parseErr != nil {
 			return nil, parseErr
 		}
 		createdByID[it.ID] = createdDay
-		personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
-		if parsePersonIDsErr != nil {
-			return nil, fmt.Errorf("parse hidden item person_ids for context %q: %w", contextOrDefault(contextID), parsePersonIDsErr)
-		}
-		it.PersonIDs = personIDs
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
-			it.UpdatedAt = t
-		}
-		if wakeAt.Valid {
-			parsedWakeAt, parseErr := parseWakeAt(wakeAt.String)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			it.SnoozeWakeAt = &parsedWakeAt
+		if err := applyWakeAt(&it, wakeAt); err != nil {
+			return nil, err
 		}
 		out = append(out, it)
 	}
@@ -238,19 +254,11 @@ func (s *Store) revealAllHiddenWithContext(ctx context.Context, contextID string
 		if scanErr := rows.Scan(&it.ID, &it.ContextID, &it.Title, &it.SubNote, &it.X, &it.Y, &it.Color, &it.Hidden, &it.Slipping, &it.Completed, &personIDsRaw, &created, &updated); scanErr != nil {
 			return nil, fmt.Errorf("scan reveal-all row for context %q: %w", contextOrDefault(contextID), scanErr)
 		}
-		createdDay, parseErr := parseCreatedLocalDay(it.ID, created)
+		createdDay, parseErr := parseItemMetadata(&it, personIDsRaw, created, updated, contextID, "reveal-all item")
 		if parseErr != nil {
 			return nil, parseErr
 		}
 		createdByID[it.ID] = createdDay
-		personIDs, parsePersonIDsErr := unmarshalPersonIDs(personIDsRaw)
-		if parsePersonIDsErr != nil {
-			return nil, fmt.Errorf("parse reveal-all item person_ids for context %q: %w", contextOrDefault(contextID), parsePersonIDsErr)
-		}
-		it.PersonIDs = personIDs
-		if t, err := time.Parse(time.RFC3339Nano, updated); err == nil {
-			it.UpdatedAt = t
-		}
 		it.InCenter = classifyDesktopBand(it.X, it.Y)
 		it.Hidden = false
 		out = append(out, it)
