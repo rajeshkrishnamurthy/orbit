@@ -122,12 +122,31 @@ export function createPeopleFilterController({
     popover.hidden = true;
   }
 
-  function open() {
+  function positionPopover() {
     const rect = pill.getBoundingClientRect();
-    popover.style.left = `${Math.max(8, rect.left)}px`;
-    popover.style.top = `${rect.bottom + 8}px`;
+    const viewportPadding = 8;
+    const gap = 8;
+
+    const popoverWidth = popover.offsetWidth || 280;
+    const popoverHeight = popover.offsetHeight || 260;
+
+    const maxLeft = Math.max(viewportPadding, window.innerWidth - popoverWidth - viewportPadding);
+    const left = Math.min(maxLeft, Math.max(viewportPadding, rect.left));
+
+    const belowTop = rect.bottom + gap;
+    const aboveTop = rect.top - popoverHeight - gap;
+    const top = (belowTop + popoverHeight <= window.innerHeight - viewportPadding)
+      ? belowTop
+      : Math.max(viewportPadding, aboveTop);
+
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  }
+
+  function open() {
     popover.hidden = false;
     renderList();
+    positionPopover();
     const search = popover.querySelector('.people-filter__search');
     search.focus();
     search.select();
@@ -149,6 +168,7 @@ export function createPeopleFilterController({
       empty.className = 'people-filter__none';
       empty.textContent = 'No people found';
       listEl.appendChild(empty);
+      if (!popover.hidden) positionPopover();
       return;
     }
 
@@ -166,6 +186,7 @@ export function createPeopleFilterController({
       });
       listEl.appendChild(btn);
     });
+    if (!popover.hidden) positionPopover();
   }
 
   async function refreshPeople(nextPeople) {
