@@ -39,7 +39,7 @@ export function createPeopleFilterController({
   const pill = documentRef.createElement('button');
   pill.type = 'button';
   pill.className = 'people-filter__pill';
-  pill.textContent = 'People';
+  pill.textContent = 'People: All';
   wrap.appendChild(pill);
   filtersControls.appendChild(wrap);
 
@@ -103,7 +103,7 @@ export function createPeopleFilterController({
 
   function updatePill() {
     const name = personNameByID(selectedPersonId);
-    const label = name ? `People: ${name}` : 'People';
+    const label = name ? `People: ${name}` : 'People: All';
     pill.textContent = label;
     pill.classList.toggle('active', !!name);
     pill.title = label;
