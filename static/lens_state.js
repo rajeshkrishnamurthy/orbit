@@ -3,7 +3,8 @@ const LENS_MODE_STORAGE_KEY = 'orbit.lens-mode';
 export function createLensStateController({
   surface,
   boundaryEl,
-  filtersControls,
+  scopeControls,
+  stateControls,
   mode,
   centerSemantics,
   syncCanvasViewportRect,
@@ -19,8 +20,8 @@ export function createLensStateController({
   let dragHaloActive = false;
   const additionalVisibilityPredicates = new Map();
 
-  const lensWrap = document.createElement('div');
-  lensWrap.className = 'lens-toggle';
+  const scopeWrap = document.createElement('div');
+  scopeWrap.className = 'lens-toggle';
 
   const sliderWrap = document.createElement('div');
   sliderWrap.className = 'lens-slider-wrap';
@@ -37,22 +38,28 @@ export function createLensStateController({
   lensSlider.addEventListener('pointerdown', () => updateBoundaryCue(true));
   lensSlider.addEventListener('pointerup', () => setTimeout(() => updateBoundaryCue(false), 380));
 
-  ['all', 'center', 'periphery', 'stale'].forEach((name) => {
+  const lensButtons = new Map();
+
+  ['all', 'center', 'periphery'].forEach((name) => {
     const button = document.createElement('button');
     button.className = 'lens-btn';
     button.dataset.lens = name;
     button.textContent = name[0].toUpperCase() + name.slice(1);
-    button.onclick = () => {
-      if (name === 'stale') {
-        toggleStaleLens();
-        return;
-      }
-      setScopeLens(name);
-    };
-    if (name === 'stale') lensWrap.appendChild(sliderWrap);
-    lensWrap.appendChild(button);
+    button.onclick = () => setScopeLens(name);
+    lensButtons.set(name, button);
+    scopeWrap.appendChild(button);
   });
-  filtersControls.appendChild(lensWrap);
+  scopeWrap.appendChild(sliderWrap);
+
+  const staleButton = document.createElement('button');
+  staleButton.className = 'lens-btn';
+  staleButton.dataset.lens = 'stale';
+  staleButton.textContent = 'Stale';
+  staleButton.onclick = () => toggleStaleLens();
+  lensButtons.set('stale', staleButton);
+
+  (scopeControls || stateControls).appendChild(scopeWrap);
+  (stateControls || scopeControls).appendChild(staleButton);
 
   function readStaleLensEnabled() {
     try {
@@ -182,15 +189,14 @@ export function createLensStateController({
   }
 
   function renderButtons() {
-    document.querySelectorAll('.lens-btn').forEach((button) => {
-      if (button.dataset.lens === 'stale') {
+    for (const [name, button] of lensButtons.entries()) {
+      if (name === 'stale') {
         button.classList.toggle('active', staleActive);
-        return;
+        continue;
       }
-      button.classList.toggle('active', button.dataset.lens === scopeLens);
-    });
-    const slider = document.querySelector('.lens-slider-wrap');
-    if (slider) slider.hidden = (scopeLens === 'all');
+      button.classList.toggle('active', name === scopeLens);
+    }
+    sliderWrap.hidden = (scopeLens === 'all');
     updateBoundaryCue(false);
   }
 

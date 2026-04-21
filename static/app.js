@@ -103,9 +103,7 @@ void (async () => {
     },
   };
   syncCanvasViewportRect();
-
-  toolbar.innerHTML = '';
-  const colorsPanel = document.createElement('div');
+  toolbar.innerHTML = ''; const colorsPanel = document.createElement('div');
   colorsPanel.className = 'toolbar__colors';
   const cardColorLabel = document.createElement('span');
   cardColorLabel.className = 'toolbar__label';
@@ -120,6 +118,10 @@ void (async () => {
   filtersPanel.hidden = false;
   const filtersControls = document.createElement('div');
   filtersControls.className = 'filters-tray__controls';
+  const makeGroup = (name) => Object.assign(document.createElement('div'), { className: `filters-group filters-group--${name}` });
+  const makeSep = () => Object.assign(document.createElement('span'), { className: 'filters-group-separator', ariaHidden: 'true' });
+  const utilityGroup = makeGroup('utility'), scopeGroup = makeGroup('scope'), stateGroup = makeGroup('state'), peopleGroup = makeGroup('people');
+  filtersControls.append(utilityGroup, makeSep(), scopeGroup, makeSep(), stateGroup, makeSep(), peopleGroup);
   filtersPanel.appendChild(filtersControls);
   filtersTray.append(filtersPanel);
   colorsPanel.append(cardColorLabel, swatchRail);
@@ -248,19 +250,20 @@ void (async () => {
   lensState = createLensStateController({
     surface,
     boundaryEl,
-    filtersControls,
+    scopeControls: scopeGroup,
+    stateControls: stateGroup,
     mode,
     centerSemantics,
     syncCanvasViewportRect,
   });
-  untouchedFilterState = createUntouchedFilterController({documentRef: document, filtersControls, mode, lensState});
+  untouchedFilterState = createUntouchedFilterController({documentRef: document, filtersControls: stateGroup, mode, lensState});
   pinPeopleState = createPinPeopleController({documentRef: document, layoutShell, surface, getTransport: getMutationTransport, showCanvasWarning, closeActivityLogPopover, savePin, onPeopleUpdated(people) { if (peopleFilterState && typeof peopleFilterState.refreshPeople === 'function') void peopleFilterState.refreshPeople(people); }});
-  peopleFilterState = createPeopleFilterController({documentRef: document, layoutShell, filtersControls, surface, mode, getTransport: getMutationTransport, lensState, initialPeople, showCanvasWarning});
+  peopleFilterState = createPeopleFilterController({documentRef: document, layoutShell, filtersControls: peopleGroup, surface, mode, getTransport: getMutationTransport, lensState, initialPeople, showCanvasWarning});
 
   hiddenTrayState = createHiddenTrayController({
     layoutShell,
     systemStrip,
-    filtersControls,
+    filtersControls: utilityGroup,
     mode,
     currentContextId,
     initialHiddenCount: window.__HIDDEN_COUNT__ || 0,

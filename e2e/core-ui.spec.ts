@@ -802,8 +802,11 @@ test('filters panel width is content-tight when slider is hidden', async ({ page
 
   const centerPanelBox = await panel.boundingBox();
   const sliderBox = await slider.boundingBox();
+  const scopeGroup = page.locator('.filters-group--scope');
+  const scopeGroupBox = await scopeGroup.boundingBox();
   expect(centerPanelBox).not.toBeNull();
   expect(sliderBox).not.toBeNull();
+  expect(scopeGroupBox).not.toBeNull();
 
   // Act: lens=Periphery should keep slider visible and preserve one-row layout.
   await page.locator('.lens-btn[data-lens="periphery"]').click();
@@ -813,10 +816,13 @@ test('filters panel width is content-tight when slider is hidden', async ({ page
   const peripheryPanelBox = await panel.boundingBox();
   expect(peripheryPanelBox).not.toBeNull();
 
-  // Assert: slider-visible modes are wider than All by a meaningful geometric margin.
-  const minWideningPx = Math.max(20, sliderBox!.width * 0.4);
-  expect(centerPanelBox!.width - allPanelBox!.width).toBeGreaterThanOrEqual(minWideningPx);
-  expect(peripheryPanelBox!.width - allPanelBox!.width).toBeGreaterThanOrEqual(minWideningPx);
+  // Assert: panel remains single-row without horizontal scrolling and slider stays within scope block.
+  const hasHorizontalOverflow = async () => panel.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+  await expect.poll(hasHorizontalOverflow).toBe(false);
+  expect(centerPanelBox!.width).toBeGreaterThanOrEqual(allPanelBox!.width);
+  expect(peripheryPanelBox!.width).toBeGreaterThanOrEqual(allPanelBox!.width);
+  expect(sliderBox!.x).toBeGreaterThanOrEqual(scopeGroupBox!.x - 1);
+  expect(sliderBox!.x + sliderBox!.width).toBeLessThanOrEqual(scopeGroupBox!.x + scopeGroupBox!.width + 1);
 });
 
 test('filters tray is open by default and preserves active filter state after Escape', async ({ page }) => {
@@ -2493,7 +2499,7 @@ test('people mapping supports create+attach and single-select people filtering',
 
   await page.locator('.people-filter__pill').click();
   await filterPopover.locator('.people-filter__clear').click();
-  await expect(page.locator('.people-filter__pill')).toHaveText('People');
+  await expect(page.locator('.people-filter__pill')).toHaveText('People: All');
 });
 
 test('people popup remains accessible near bottom edge', async ({ page }) => {
