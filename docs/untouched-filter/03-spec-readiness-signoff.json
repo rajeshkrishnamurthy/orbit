@@ -1,0 +1,8 @@
+{
+  "initiative_slug": "untouched-filter",
+  "spec_doc_path": "docs/untouched-filter/02-feature-spec.md",
+  "ambiguities_jsonl_path": "docs/untouched-filter/02-feature-spec.jsonl",
+  "readiness": "READY_FOR_IMPLEMENTATION",
+  "unresolved_high_medium_count": 0,
+  "generated_at": "2026-04-21T00:59:37.850962Z"
+}

@@ -96,7 +96,7 @@ export function createPeopleFilterController({
   }
 
   function applyPredicate() {
-    lensState.setAdditionalVisibilityPredicate((pin) => isPinPeopleMatch(pin));
+    lensState.setAdditionalVisibilityPredicate('people', (pin) => isPinPeopleMatch(pin));
     updatePill();
     syncEmptyState();
   }

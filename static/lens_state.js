@@ -17,7 +17,7 @@ export function createLensStateController({
   let staleLensSnapshot = new Set();
   const staleLensDetachedPins = new Map();
   let dragHaloActive = false;
-  let additionalVisibilityPredicate = () => true;
+  const additionalVisibilityPredicates = new Map();
 
   const lensWrap = document.createElement('div');
   lensWrap.className = 'lens-toggle';
@@ -207,7 +207,10 @@ export function createLensStateController({
     const scopeVisible = (scopeLens === 'all') ? true : (lensExempt.has(id) || inLens(pin));
     if (!scopeVisible) return false;
     if (staleActive && !staleLensSnapshot.has(id)) return false;
-    return additionalVisibilityPredicate(pin) !== false;
+    for (const predicate of additionalVisibilityPredicates.values()) {
+      if (predicate(pin) === false) return false;
+    }
+    return true;
   }
 
   function applyLens() {
@@ -291,9 +294,17 @@ export function createLensStateController({
     return (!markSaved || isVisible(pin)) ? '' : 'none';
   }
 
-  function setAdditionalVisibilityPredicate(nextPredicate) {
-    if (typeof nextPredicate === 'function') additionalVisibilityPredicate = nextPredicate;
-    else additionalVisibilityPredicate = () => true;
+  function setAdditionalVisibilityPredicate(keyOrPredicate, maybePredicate) {
+    if (typeof keyOrPredicate === 'string') {
+      const key = keyOrPredicate;
+      if (typeof maybePredicate === 'function') additionalVisibilityPredicates.set(key, maybePredicate);
+      else additionalVisibilityPredicates.delete(key);
+      applyLens();
+      return;
+    }
+    const defaultKey = '__default__';
+    if (typeof keyOrPredicate === 'function') additionalVisibilityPredicates.set(defaultKey, keyOrPredicate);
+    else additionalVisibilityPredicates.delete(defaultKey);
     applyLens();
   }
 

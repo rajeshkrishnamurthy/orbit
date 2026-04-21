@@ -968,6 +968,50 @@ test('hidden tray remains open during filters interactions and closes independen
   await expect(hiddenTray).toBeHidden();
 });
 
+test('untouched filter shows untouched visible cards in active context', async ({ page }) => {
+  const touchedTitle = `untouched-touched-${Date.now()}`;
+  const untouchedTitle = `untouched-never-${Date.now()}`;
+
+  await createCard(page, touchedTitle, 980, 260);
+  await createCard(page, untouchedTitle, 1120, 260);
+
+  const touchedPin = await pinByTitle(page, touchedTitle);
+  const untouchedPin = await pinByTitle(page, untouchedTitle);
+  const touchedId = await touchedPin.getAttribute('data-id');
+  const untouchedId = await untouchedPin.getAttribute('data-id');
+  expect(touchedId).toBeTruthy();
+  expect(untouchedId).toBeTruthy();
+
+  await page.evaluate(async (id) => {
+    await fetch('/api/items/touch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+  }, touchedId);
+  await page.reload();
+
+  const touchedReloaded = page.locator(`.pin[data-id="${touchedId}"]`);
+  const untouchedReloaded = page.locator(`.pin[data-id="${untouchedId}"]`);
+  await expect(touchedReloaded).toHaveAttribute('data-touched-today', 'true');
+
+  const untouchedPill = page.locator('.untouched-filter__pill');
+  await expect(untouchedPill).toBeVisible();
+  await untouchedPill.click();
+  await expect(untouchedPill).toHaveClass(/active/);
+
+  let visible = await visiblePinIds(page);
+  expect(visible).toContain(untouchedId!);
+  expect(visible).not.toContain(touchedId!);
+
+  await openActionDrawer(untouchedReloaded);
+  await untouchedReloaded.locator('.pin-action-drawer .pin-hide').click();
+  await confirmHideChooserWithKey(page, 'Enter');
+
+  visible = await visiblePinIds(page);
+  expect(visible).not.toContain(untouchedId!);
+});
+
 test('stale lens shows only entry-time stale cards and refreshes on reload', async ({ page }) => {
   await page.goto('/?canvas=contexts');
   await expect(page.locator('#surface')).toBeVisible();

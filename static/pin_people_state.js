@@ -128,14 +128,22 @@ export function createPinPeopleController({
   function renderSuggestions(pin, query, container) {
     const personIDs = new Set(readPinPersonIDs(pin));
     const q = String(query || '').trim().toLowerCase();
+
+    container.innerHTML = '';
+    if (!q) {
+      const empty = documentRef.createElement('div');
+      empty.className = 'people-popover__empty';
+      empty.textContent = 'Type to search people';
+      container.appendChild(empty);
+      return;
+    }
+
     const list = sortPeopleStable(peopleCache).filter((person) => {
       if (!person || !person.id) return false;
       if (personIDs.has(person.id)) return false;
-      if (!q) return true;
       return String(person.display_name || '').toLowerCase().includes(q);
     });
 
-    container.innerHTML = '';
     list.forEach((person) => {
       const btn = documentRef.createElement('button');
       btn.type = 'button';
