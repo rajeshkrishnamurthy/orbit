@@ -13,7 +13,7 @@ void (async () => {
     {createResurfaceShelfController},
     {createHideSnoozeChoiceController},
     {createChromeContextStripController},
-    {createPinPeopleController}, {createPeopleFilterController},
+    {createPinPeopleController}, {createPeopleFilterController}, {createUntouchedFilterController},
   ] = await Promise.all([
     import('/static/lens_state.js'),
     import('/static/hidden_tray_state.js'),
@@ -27,7 +27,7 @@ void (async () => {
     import('/static/undo_ack_state.js'),
     import('/static/resurface_shelf_state.js'),
     import('/static/hide_snooze_choice_state.js'),
-    import('/static/chrome_context_strip.js'), import('/static/pin_people_state.js'), import('/static/people_filter_state.js'),
+    import('/static/chrome_context_strip.js'), import('/static/pin_people_state.js'), import('/static/people_filter_state.js'), import('/static/untouched_filter_state.js'),
   ]);
   const layoutShell = document.querySelector('.layout-shell') || document.body;
   const systemStrip = document.getElementById('system-strip');
@@ -59,7 +59,7 @@ void (async () => {
   let pinActivityLogState = null;
   let resurfaceShelfState = null;
   let hideSnoozeChoiceState = null;
-  let chromeContextStripState = null; let pinPeopleState = null; let peopleFilterState = null;
+  let chromeContextStripState = null; let pinPeopleState = null; let peopleFilterState = null; let untouchedFilterState = null;
 
   function readCenterSemantics() {
     const candidates = [
@@ -253,6 +253,7 @@ void (async () => {
     centerSemantics,
     syncCanvasViewportRect,
   });
+  untouchedFilterState = createUntouchedFilterController({documentRef: document, filtersControls, mode, lensState});
   pinPeopleState = createPinPeopleController({documentRef: document, layoutShell, surface, getTransport: getMutationTransport, showCanvasWarning, closeActivityLogPopover, savePin, onPeopleUpdated(people) { if (peopleFilterState && typeof peopleFilterState.refreshPeople === 'function') void peopleFilterState.refreshPeople(people); }});
   peopleFilterState = createPeopleFilterController({documentRef: document, layoutShell, filtersControls, surface, mode, getTransport: getMutationTransport, lensState, initialPeople, showCanvasWarning});
 
@@ -420,6 +421,7 @@ void (async () => {
   }
 
   function applyLens(){
+    if (untouchedFilterState) untouchedFilterState.syncFromLensState();
     lensState.applyLens();
     if (peopleFilterState) peopleFilterState.syncEmptyState();
   }
