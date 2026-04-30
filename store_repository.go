@@ -36,11 +36,6 @@ func (s *Store) importJSON(path string) error {
 }
 
 func (s *Store) seedDefaults() error {
-	for _, it := range seedItems() {
-		if err := s.updateWithContext(context.Background(), it); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 

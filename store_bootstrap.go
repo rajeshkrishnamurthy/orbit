@@ -155,9 +155,6 @@ func prepareStorePath(dbPath string) (bool, string, error) {
 		return false, "", errors.New("legacy data/items.json detected; archive it (e.g. items.legacy.json) before running to avoid split-brain")
 	}
 	if hadDB {
-		if err := backupDB(dbPath); err != nil {
-			return false, "", fmt.Errorf("backup db: %w", err)
-		}
 		return true, initializedFlag, nil
 	}
 	if fileExists(initializedFlag) {
@@ -189,7 +186,7 @@ func (s *Store) seedIfNeeded(count int, hadDB bool, initializedFlag string) erro
 		return nil
 	}
 	if hadDB || fileExists(initializedFlag) {
-		return errors.New("sqlite is empty in an initialized environment; refusing silent reset")
+		return nil
 	}
 	if err := s.ensureInitialContexts(); err != nil {
 		return err
@@ -260,11 +257,6 @@ func (s *Store) ensureDefaultContext() error {
 }
 
 func (s *Store) ensureInitialContexts() error {
-	now := time.Now().Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`INSERT OR IGNORE INTO contexts(id,title,sub_note,x,y,color,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, "more-contexts", "Add more contexts", "Each context has its own canvas. Unleash!", 560.0, 500.0, "var(--c2)", now, now)
-	if err != nil {
-		return fmt.Errorf("ensure initial contexts row: %w", err)
-	}
 	return nil
 }
 

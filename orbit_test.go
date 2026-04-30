@@ -143,20 +143,6 @@ func assertJSONResponse(t *testing.T, rr *httptest.ResponseRecorder, wantCode in
 	}
 }
 
-func assertSeededItemPosition(t *testing.T, items []Item, id string, wantX, wantY float64) {
-	t.Helper()
-	for _, it := range items {
-		if it.ID != id {
-			continue
-		}
-		if it.X != wantX || it.Y != wantY {
-			t.Fatalf("unexpected seeded position for %s: got=(%v,%v) want=(%v,%v)", id, it.X, it.Y, wantX, wantY)
-		}
-		return
-	}
-	t.Fatalf("expected seeded item %s to exist", id)
-}
-
 func assertUnhideAtResponse(t *testing.T, rr *httptest.ResponseRecorder, targetX, targetY float64) {
 	t.Helper()
 	if rr.Code != http.StatusOK {
@@ -1521,26 +1507,17 @@ func TestNewStoreSeedsCanonicalDefaults(t *testing.T) {
 		t.Fatalf("unexpected main-orbit context: %+v", *mainCtx)
 	}
 
-	moreCtx, err := s.contextByID("more-contexts")
-	if err != nil {
-		t.Fatalf("contextByID more-contexts: %v", err)
-	}
-	if moreCtx.Title != "Add more contexts" || moreCtx.X != 560.0 || moreCtx.Y != 500.0 {
-		t.Fatalf("unexpected more-contexts context: %+v", *moreCtx)
+	if _, err := s.contextByID("more-contexts"); err == nil {
+		t.Fatal("expected more-contexts to be absent on first run")
 	}
 
 	items, err := s.snapshot("main-orbit")
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
-	if len(items) != 7 {
-		t.Fatalf("expected 7 seeded items, got %d", len(items))
+	if len(items) != 0 {
+		t.Fatalf("expected 0 seeded items, got %d", len(items))
 	}
-
-	assertSeededItemPosition(t, items, "i1", 760, 280)
-	assertSeededItemPosition(t, items, "i2", 620, 380)
-	assertSeededItemPosition(t, items, "i5", 360, 460)
-	assertSeededItemPosition(t, items, "i7", 1020, 360)
 }
 
 func TestContextByIDDefaultsBlankAndUpsertPreservesCreatedAt(t *testing.T) {
@@ -2339,7 +2316,7 @@ func TestMigrateLegacyDataCopiesOnlyPresentFiles(t *testing.T) {
 	})
 }
 
-func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
+func TestNewStoreExistingDBDoesNotCreateStartupBackup(t *testing.T) {
 	s, dbPath := newTestStore(t)
 	if err := s.db.Close(); err != nil {
 		t.Fatalf("close original store: %v", err)
@@ -2354,20 +2331,19 @@ func TestNewStoreExistingDBCreatesBackupFiles(t *testing.T) {
 	}
 	defer func() { _ = s2.db.Close() }()
 
-	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
-	if err != nil {
-		t.Fatalf("expected latest backup file, stat err=%v", err)
+	if fileExists(filepath.Join(backupDir, "orbit.db.bak")) {
+		t.Fatalf("startup should not create latest backup in %s", backupDir)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
 	if err != nil {
 		t.Fatalf("glob versioned backups: %v", err)
 	}
-	if len(versioned) == 0 {
-		t.Fatalf("expected at least one versioned backup, got none")
+	if len(versioned) != 0 {
+		t.Fatalf("startup should not create versioned backups, got %v", versioned)
 	}
 }
 
-func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
+func TestExistingDataSurvivesStartupWithoutBackupSideEffects(t *testing.T) {
 	s, dbPath := newTestStore(t)
 	if err := s.update(Item{
 		ID:        "t_update_retention_1",
@@ -2403,16 +2379,15 @@ func TestExistingDataSurvivesStartupAndCreatesBackup(t *testing.T) {
 		t.Fatalf("retained item changed unexpectedly: title=%q sub=%q x=%v y=%v", title, subNote, x, y)
 	}
 
-	_, err = os.Stat(filepath.Join(backupDir, "orbit.db.bak"))
-	if err != nil {
-		t.Fatalf("expected latest backup file, stat err=%v", err)
+	if fileExists(filepath.Join(backupDir, "orbit.db.bak")) {
+		t.Fatalf("startup should not create latest backup in %s", backupDir)
 	}
 	versioned, err := filepath.Glob(filepath.Join(backupDir, "orbit.db.*.bak"))
 	if err != nil {
 		t.Fatalf("glob versioned backups: %v", err)
 	}
-	if len(versioned) == 0 {
-		t.Fatalf("expected at least one versioned backup, got none")
+	if len(versioned) != 0 {
+		t.Fatalf("startup should not create versioned backups, got %v", versioned)
 	}
 }
 
@@ -2526,12 +2501,18 @@ CREATE TABLE IF NOT EXISTS items (
 		t.Fatalf("write init flag: %v", err)
 	}
 
-	_, err = newStore(dbPath)
-	if err == nil {
-		t.Fatal("expected newStore to reject initialized empty sqlite")
+	reopened, err := newStore(dbPath)
+	if err != nil {
+		t.Fatalf("expected initialized empty sqlite to reopen cleanly: %v", err)
 	}
-	if !strings.Contains(err.Error(), "sqlite is empty in an initialized environment") {
-		t.Fatalf("unexpected error: %v", err)
+	defer func() { _ = reopened.db.Close() }()
+
+	items, err := reopened.snapshot("main-orbit")
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items after reopening initialized empty sqlite, got %d", len(items))
 	}
 }
 
@@ -3138,8 +3119,8 @@ func TestNewHandlerPreservesExistingDataOnStartup(t *testing.T) {
 		t.Fatalf("unexpected retained row: title=%q subNote=%q x=%v y=%v", title, subNote, x, y)
 	}
 
-	if !fileExists(filepath.Join(dataDir, "backups", "orbit.db.bak")) {
-		t.Fatalf("expected startup backup to exist in %s", dataDir)
+	if fileExists(filepath.Join(dataDir, "backups", "orbit.db.bak")) {
+		t.Fatalf("startup should not create backups for existing DBs in %s", dataDir)
 	}
 }
 
@@ -3153,6 +3134,29 @@ func TestOrbitDataDirRejectsNonDirectoryOverride(t *testing.T) {
 
 	if _, err := orbitDataDir(); err == nil {
 		t.Fatal("expected orbitDataDir to fail when override path is a file")
+	}
+}
+
+func TestWithFirstTimeCleanupBackupCreatesNamedBackupBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "orbit.db")
+	if err := os.WriteFile(dbPath, []byte("existing-db"), 0o644); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+
+	mutated := false
+	err := withFirstTimeCleanupBackup(dbPath, func() error {
+		if !fileExists(filepath.Join(dir, "orbit-first-time-cleanup.db.bak")) {
+			t.Fatal("expected first-time-cleanup backup to exist before mutation")
+		}
+		mutated = true
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("withFirstTimeCleanupBackup: %v", err)
+	}
+	if !mutated {
+		t.Fatal("expected mutation callback to run")
 	}
 }
 

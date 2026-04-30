@@ -35,6 +35,21 @@ func backupDB(path string) error {
 	return pruneBackups(filepath.Join(backupDir, base), 10)
 }
 
+func backupFirstTimeCleanupDB(path string) error {
+	backupPath := filepath.Join(filepath.Dir(path), "orbit-first-time-cleanup.db.bak")
+	return copyFile(path, backupPath)
+}
+
+func withFirstTimeCleanupBackup(path string, mutate func() error) error {
+	if err := backupFirstTimeCleanupDB(path); err != nil {
+		return err
+	}
+	if mutate == nil {
+		return nil
+	}
+	return mutate()
+}
+
 func pruneBackups(path string, keep int) error {
 	if keep <= 0 {
 		return nil

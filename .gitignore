@@ -16,3 +16,7 @@ test-results
 .e2e-data
 desktop/build/bin/
 .packet0-data/
+.pi/todos/
+.tmp-first-run/
+.tmp-orbit-test/
+data.bak-test-first-run/
